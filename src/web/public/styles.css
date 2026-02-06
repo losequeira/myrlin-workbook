@@ -2146,7 +2146,8 @@ textarea.input {
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
   gap: 2px;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   background: var(--crust);
 }
 .terminal-grid[data-panes="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }

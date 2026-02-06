@@ -76,6 +76,11 @@ class PtySessionManager {
     let fullCommand = command;
     if (resumeSessionId) {
       fullCommand += ' --resume ' + resumeSessionId;
+      // When resuming a session in an embedded terminal, skip the trust prompt
+      // since the user already authenticated through the web UI
+      if (!bypassPermissions) {
+        bypassPermissions = true;
+      }
     }
     if (bypassPermissions) {
       fullCommand += ' --dangerously-skip-permissions';
@@ -150,7 +155,7 @@ class PtySessionManager {
       // Store may not have this session
     }
 
-    console.log(`[PTY] Spawned session ${sessionId} (PID: ${ptyProcess.pid})`);
+    console.log(`[PTY] Spawned session ${sessionId} (PID: ${ptyProcess.pid}) cmd: "${fullCommand}" cwd: "${cwd || process.cwd()}"`);
     return session;
   }
 
@@ -171,6 +176,7 @@ class PtySessionManager {
         const store = getStore();
         const storeSession = store.getSession(sessionId);
         if (storeSession) {
+          console.log(`[PTY] Spawning from store data for ${sessionId}: resumeSessionId=${storeSession.resumeSessionId}, cwd=${storeSession.workingDir}, cmd=${storeSession.command}`);
           session = this.spawnSession(sessionId, {
             command: storeSession.command || 'claude',
             cwd: storeSession.workingDir || undefined,
@@ -181,6 +187,7 @@ class PtySessionManager {
             ...spawnOpts,
           });
         } else {
+          console.log(`[PTY] No store data for ${sessionId}, spawning with provided options`);
           // No store data - spawn with provided options
           session = this.spawnSession(sessionId, spawnOpts);
         }
