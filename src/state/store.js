@@ -1,0 +1,456 @@
+/**
+ * Core state store for Claude Workspace Manager
+ * Handles JSON persistence, CRUD operations, and state transitions.
+ * All state is persisted to ./state/workspaces.json
+ */
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { EventEmitter } = require('events');
+
+const STATE_DIR = path.join(__dirname, '..', '..', 'state');
+const STATE_FILE = path.join(STATE_DIR, 'workspaces.json');
+const BACKUP_FILE = path.join(STATE_DIR, 'workspaces.backup.json');
+
+// Default state shape
+const MAX_RECENT = 10;
+
+const DEFAULT_STATE = {
+  version: 1,
+  workspaces: {},
+  sessions: {},
+  activeWorkspace: null,
+  recentSessions: [], // Last N session IDs, most recent last
+  workspaceGroups: {},    // { groupId: { id, name, color, workspaceIds: [], order: 0 } }
+  workspaceOrder: [],     // mixed array of workspace IDs and group IDs for sidebar ordering
+  settings: {
+    autoRecover: true,
+    notificationLevel: 'all', // 'all' | 'errors' | 'none'
+    theme: 'dark',
+    confirmBeforeClose: true,
+  },
+};
+
+class Store extends EventEmitter {
+  constructor() {
+    super();
+    this._state = null;
+    this._dirty = false;
+    this._saveTimer = null;
+  }
+
+  /**
+   * Initialize the store - load from disk or create default
+   */
+  init() {
+    if (!fs.existsSync(STATE_DIR)) {
+      fs.mkdirSync(STATE_DIR, { recursive: true });
+    }
+    this._state = this._load();
+    return this;
+  }
+
+  /**
+   * Load state from disk
+   */
+  _load() {
+    try {
+      if (fs.existsSync(STATE_FILE)) {
+        const raw = fs.readFileSync(STATE_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        // Merge with defaults to handle schema upgrades
+        return {
+          ...DEFAULT_STATE,
+          ...parsed,
+          settings: { ...DEFAULT_STATE.settings, ...(parsed.settings || {}) },
+          workspaceGroups: parsed.workspaceGroups || {},
+          workspaceOrder: parsed.workspaceOrder || [],
+        };
+      }
+    } catch (err) {
+      // Try backup
+      try {
+        if (fs.existsSync(BACKUP_FILE)) {
+          const raw = fs.readFileSync(BACKUP_FILE, 'utf-8');
+          return { ...DEFAULT_STATE, ...JSON.parse(raw) };
+        }
+      } catch (_) {
+        // Fall through to default
+      }
+    }
+    return { ...DEFAULT_STATE };
+  }
+
+  /**
+   * Save state to disk (with backup)
+   */
+  save() {
+    try {
+      // Backup current file first
+      if (fs.existsSync(STATE_FILE)) {
+        fs.copyFileSync(STATE_FILE, BACKUP_FILE);
+      }
+      fs.writeFileSync(STATE_FILE, JSON.stringify(this._state, null, 2), 'utf-8');
+      this._dirty = false;
+    } catch (err) {
+      this.emit('error', { type: 'save_failed', error: err.message });
+    }
+  }
+
+  /**
+   * Debounced save - batches rapid changes
+   */
+  _debouncedSave() {
+    this._dirty = true;
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => this.save(), 500);
+  }
+
+  // ─── Getters ─────────────────────────────────────────────
+
+  get state() { return this._state; }
+  get workspaces() { return this._state.workspaces; }
+  get sessions() { return this._state.sessions; }
+  get settings() { return this._state.settings; }
+  get activeWorkspace() { return this._state.activeWorkspace; }
+
+  getWorkspace(id) { return this._state.workspaces[id] || null; }
+  getSession(id) { return this._state.sessions[id] || null; }
+
+  getWorkspaceSessions(workspaceId) {
+    const ws = this.getWorkspace(workspaceId);
+    if (!ws) return [];
+    return ws.sessions.map(sid => this._state.sessions[sid]).filter(Boolean);
+  }
+
+  getActiveWorkspace() {
+    if (!this._state.activeWorkspace) return null;
+    return this.getWorkspace(this._state.activeWorkspace);
+  }
+
+  getAllWorkspacesList() {
+    return Object.values(this._state.workspaces).sort((a, b) =>
+      new Date(b.lastActive || b.createdAt) - new Date(a.lastActive || a.createdAt)
+    );
+  }
+
+  getAllSessionsList() {
+    return Object.values(this._state.sessions).sort((a, b) =>
+      new Date(b.lastActive || b.createdAt) - new Date(a.lastActive || a.createdAt)
+    );
+  }
+
+  // ─── Workspace CRUD ──────────────────────────────────────
+
+  createWorkspace({ name, description = '', color = 'cyan' }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const workspace = {
+      id,
+      name,
+      description,
+      color,
+      sessions: [],
+      createdAt: now,
+      lastActive: now,
+    };
+    this._state.workspaces[id] = workspace;
+    // Auto-activate if first workspace
+    if (!this._state.activeWorkspace) {
+      this._state.activeWorkspace = id;
+    }
+    this._debouncedSave();
+    this.emit('workspace:created', workspace);
+    return workspace;
+  }
+
+  updateWorkspace(id, updates) {
+    const ws = this._state.workspaces[id];
+    if (!ws) return null;
+    Object.assign(ws, updates, { lastActive: new Date().toISOString() });
+    this._debouncedSave();
+    this.emit('workspace:updated', ws);
+    return ws;
+  }
+
+  deleteWorkspace(id) {
+    const ws = this._state.workspaces[id];
+    if (!ws) return false;
+    // Remove associated sessions
+    for (const sid of ws.sessions) {
+      delete this._state.sessions[sid];
+    }
+    delete this._state.workspaces[id];
+    if (this._state.activeWorkspace === id) {
+      const remaining = Object.keys(this._state.workspaces);
+      this._state.activeWorkspace = remaining.length > 0 ? remaining[0] : null;
+    }
+    this._debouncedSave();
+    this.emit('workspace:deleted', { id });
+    return true;
+  }
+
+  setActiveWorkspace(id) {
+    if (!this._state.workspaces[id]) return false;
+    this._state.activeWorkspace = id;
+    this._debouncedSave();
+    this.emit('workspace:activated', this._state.workspaces[id]);
+    return true;
+  }
+
+  // ─── Session CRUD ────────────────────────────────────────
+
+  createSession({ name, workspaceId, workingDir = '', topic = '', command = 'claude', resumeSessionId = null }) {
+    if (!this._state.workspaces[workspaceId]) return null;
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const session = {
+      id,
+      name,
+      workspaceId,
+      workingDir,
+      topic,
+      command,
+      resumeSessionId,
+      status: 'stopped', // 'running' | 'stopped' | 'error' | 'idle'
+      pid: null,
+      createdAt: now,
+      lastActive: now,
+      logs: [],
+    };
+    this._state.sessions[id] = session;
+    this._state.workspaces[workspaceId].sessions.push(id);
+    this._state.workspaces[workspaceId].lastActive = now;
+    this._debouncedSave();
+    this.emit('session:created', session);
+    return session;
+  }
+
+  updateSession(id, updates) {
+    const session = this._state.sessions[id];
+    if (!session) return null;
+    Object.assign(session, updates, { lastActive: new Date().toISOString() });
+    this._debouncedSave();
+    this.emit('session:updated', session);
+    return session;
+  }
+
+  deleteSession(id) {
+    const session = this._state.sessions[id];
+    if (!session) return false;
+    // Remove from workspace
+    const ws = this._state.workspaces[session.workspaceId];
+    if (ws) {
+      ws.sessions = ws.sessions.filter(sid => sid !== id);
+    }
+    delete this._state.sessions[id];
+    this._debouncedSave();
+    this.emit('session:deleted', { id });
+    return true;
+  }
+
+  updateSessionStatus(id, status, pid = null) {
+    return this.updateSession(id, { status, pid });
+  }
+
+  addSessionLog(id, message) {
+    const session = this._state.sessions[id];
+    if (!session) return;
+    session.logs = session.logs || [];
+    session.logs.push({ time: new Date().toISOString(), message });
+    // Keep last 100 log entries
+    if (session.logs.length > 100) {
+      session.logs = session.logs.slice(-100);
+    }
+    this._debouncedSave();
+    this.emit('session:log', { id, message });
+  }
+
+  // ─── Recent Sessions ─────────────────────────────────────
+
+  /**
+   * Mark a session as recently interacted with (moves to front of recents)
+   */
+  touchRecent(sessionId) {
+    if (!this._state.sessions[sessionId]) return;
+    this._state.recentSessions = this._state.recentSessions || [];
+    // Remove if already present, then add to end (most recent)
+    this._state.recentSessions = this._state.recentSessions.filter(id => id !== sessionId);
+    this._state.recentSessions.push(sessionId);
+    // Trim to max
+    if (this._state.recentSessions.length > MAX_RECENT) {
+      this._state.recentSessions = this._state.recentSessions.slice(-MAX_RECENT);
+    }
+    this._debouncedSave();
+  }
+
+  /**
+   * Get recent session objects (most recent first)
+   */
+  getRecentSessions(count = MAX_RECENT) {
+    const ids = (this._state.recentSessions || []).slice(-count).reverse();
+    return ids.map(id => this._state.sessions[id]).filter(Boolean);
+  }
+
+  // ─── Workspace Groups ───────────────────────────────────
+
+  /**
+   * Create a new workspace group.
+   * @param {{ name: string, color?: string }} params
+   * @returns {object} The created group
+   */
+  createGroup({ name, color = 'blue' }) {
+    const id = crypto.randomUUID();
+    const group = {
+      id,
+      name,
+      color,
+      workspaceIds: [],
+      order: Object.keys(this._state.workspaceGroups).length,
+    };
+    this._state.workspaceGroups[id] = group;
+    this._state.workspaceOrder.push(id);
+    this.save();
+    this.emit('group:created', group);
+    return group;
+  }
+
+  /**
+   * Update a workspace group's name, color, or workspaceIds.
+   * @param {string} id - Group ID
+   * @param {object} updates - Partial group fields
+   * @returns {object|null} Updated group or null if not found
+   */
+  updateGroup(id, updates) {
+    const group = this._state.workspaceGroups[id];
+    if (!group) return null;
+    // Only allow safe fields to be updated
+    if (updates.name !== undefined) group.name = updates.name;
+    if (updates.color !== undefined) group.color = updates.color;
+    if (updates.workspaceIds !== undefined) group.workspaceIds = updates.workspaceIds;
+    if (updates.order !== undefined) group.order = updates.order;
+    this.save();
+    this.emit('group:updated', group);
+    return group;
+  }
+
+  /**
+   * Delete a workspace group. Workspaces in the group become ungrouped.
+   * @param {string} id - Group ID
+   * @returns {boolean} True if deleted
+   */
+  deleteGroup(id) {
+    const group = this._state.workspaceGroups[id];
+    if (!group) return false;
+    // Remove group from workspaceOrder
+    this._state.workspaceOrder = this._state.workspaceOrder.filter(oid => oid !== id);
+    // Workspaces that were in this group are now ungrouped (they stay in workspaceOrder individually)
+    delete this._state.workspaceGroups[id];
+    this.save();
+    this.emit('group:deleted', { id });
+    return true;
+  }
+
+  /**
+   * Move a workspace into a group. Removes it from any existing group first.
+   * @param {string} workspaceId
+   * @param {string} groupId
+   * @returns {boolean} True on success
+   */
+  moveWorkspaceToGroup(workspaceId, groupId) {
+    const group = this._state.workspaceGroups[groupId];
+    if (!group) return false;
+    if (!this._state.workspaces[workspaceId]) return false;
+    // Remove from any existing group
+    this._removeWorkspaceFromAllGroups(workspaceId);
+    // Add to the target group
+    if (!group.workspaceIds.includes(workspaceId)) {
+      group.workspaceIds.push(workspaceId);
+    }
+    // Remove workspace from top-level workspaceOrder since it's now in a group
+    this._state.workspaceOrder = this._state.workspaceOrder.filter(oid => oid !== workspaceId);
+    this.save();
+    this.emit('group:updated', group);
+    return true;
+  }
+
+  /**
+   * Remove a workspace from whichever group it belongs to (becomes ungrouped).
+   * @param {string} workspaceId
+   * @returns {boolean} True if it was removed from a group
+   */
+  removeWorkspaceFromGroup(workspaceId) {
+    const removed = this._removeWorkspaceFromAllGroups(workspaceId);
+    if (removed) {
+      // Add back to top-level workspaceOrder if not already there
+      if (!this._state.workspaceOrder.includes(workspaceId)) {
+        this._state.workspaceOrder.push(workspaceId);
+      }
+      this.save();
+      this.emit('workspaces:reordered', this._state.workspaceOrder);
+    }
+    return removed;
+  }
+
+  /**
+   * Internal: remove a workspace from all groups.
+   * @param {string} workspaceId
+   * @returns {boolean} True if it was in any group
+   */
+  _removeWorkspaceFromAllGroups(workspaceId) {
+    let found = false;
+    for (const group of Object.values(this._state.workspaceGroups)) {
+      const idx = group.workspaceIds.indexOf(workspaceId);
+      if (idx !== -1) {
+        group.workspaceIds.splice(idx, 1);
+        found = true;
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Set the full ordering of workspaces and groups in the sidebar.
+   * @param {string[]} orderedIds - Mixed array of workspace IDs and group IDs
+   */
+  reorderWorkspaces(orderedIds) {
+    this._state.workspaceOrder = orderedIds;
+    this.save();
+    this.emit('workspaces:reordered', orderedIds);
+  }
+
+  /**
+   * Get all workspace groups as an array.
+   * @returns {object[]}
+   */
+  getAllGroups() {
+    return Object.values(this._state.workspaceGroups);
+  }
+
+  // ─── Settings ────────────────────────────────────────────
+
+  updateSettings(updates) {
+    Object.assign(this._state.settings, updates);
+    this._debouncedSave();
+    this.emit('settings:updated', this._state.settings);
+  }
+
+  // ─── Cleanup ─────────────────────────────────────────────
+
+  destroy() {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    if (this._dirty) this.save();
+  }
+}
+
+// Singleton
+let instance = null;
+function getStore() {
+  if (!instance) {
+    instance = new Store().init();
+  }
+  return instance;
+}
+
+module.exports = { Store, getStore };

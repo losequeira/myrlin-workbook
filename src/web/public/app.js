@@ -426,6 +426,8 @@ class CWMApp {
       const data = await this.api('GET', path);
       this.state.sessions = data.sessions || [];
       this.renderSessions();
+      // Re-render workspace accordion to update session sub-items
+      this.renderWorkspaces();
     } catch (err) {
       this.showToast('Failed to load sessions', 'error');
     }
@@ -1707,26 +1709,45 @@ class CWMApp {
     const renderWorkspaceItem = (ws) => {
       const isActive = this.state.activeWorkspace && this.state.activeWorkspace.id === ws.id;
       const color = colorMap[ws.color] || colorMap.mauve;
-      const sessionCount = ws.sessions ? ws.sessions.length : 0;
+      const wsSessions = this.state.sessions.filter(s => s.workspaceId === ws.id);
+      const sessionCount = wsSessions.length;
+
+      // Build session sub-items for accordion
+      const sessionItems = wsSessions.map(s => {
+        const statusDot = s.status === 'running' ? 'var(--green)' : 'var(--overlay0)';
+        const name = s.name || s.id.substring(0, 12);
+        const timeStr = s.lastActive ? this.relativeTime(s.lastActive) : '';
+        return `<div class="ws-session-item" data-session-id="${s.id}" draggable="true" title="${this.escapeHtml(s.workingDir || '')}">
+          <span class="ws-session-dot" style="background: ${statusDot}"></span>
+          <span class="ws-session-name">${this.escapeHtml(name.length > 22 ? name.substring(0, 22) + '...' : name)}</span>
+          ${timeStr ? `<span class="ws-session-time">${timeStr}</span>` : ''}
+        </div>`;
+      }).join('');
 
       return `
-        <div class="workspace-item${isActive ? ' active' : ''}" data-id="${ws.id}" draggable="true">
-          <div class="workspace-color-dot" style="background: ${color}"></div>
-          <div class="workspace-info">
-            <div class="workspace-name">${this.escapeHtml(ws.name)}</div>
-            <div class="workspace-session-count">${sessionCount} session${sessionCount !== 1 ? 's' : ''}</div>
+        <div class="workspace-accordion" data-id="${ws.id}">
+          <div class="workspace-item${isActive ? ' active' : ''}" data-id="${ws.id}" draggable="true">
+            <span class="ws-chevron${isActive ? ' open' : ''}">&#9654;</span>
+            <div class="workspace-color-dot" style="background: ${color}"></div>
+            <div class="workspace-info">
+              <div class="workspace-name">${this.escapeHtml(ws.name)}</div>
+              <div class="workspace-session-count">${sessionCount} session${sessionCount !== 1 ? 's' : ''}</div>
+            </div>
+            <div class="workspace-actions">
+              <button class="btn btn-ghost btn-icon btn-sm ws-rename-btn" data-id="${ws.id}" title="Edit">
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                  <path d="M8.5 2.5l3 3M2 9.5V12h2.5L11 5.5l-3-3L2 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <button class="btn btn-ghost btn-icon btn-sm btn-danger-hover ws-delete-btn" data-id="${ws.id}" title="Delete">
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                  <path d="M2.5 4h9M5 4V2.5h4V4M3.5 4v7.5a1 1 0 001 1h5a1 1 0 001-1V4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
           </div>
-          <div class="workspace-actions">
-            <button class="btn btn-ghost btn-icon btn-sm ws-rename-btn" data-id="${ws.id}" title="Edit">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                <path d="M8.5 2.5l3 3M2 9.5V12h2.5L11 5.5l-3-3L2 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-            <button class="btn btn-ghost btn-icon btn-sm btn-danger-hover ws-delete-btn" data-id="${ws.id}" title="Delete">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                <path d="M2.5 4h9M5 4V2.5h4V4M3.5 4v7.5a1 1 0 001 1h5a1 1 0 001-1V4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
+          <div class="workspace-accordion-body"${isActive ? '' : ' hidden'}>
+            ${sessionItems || '<div class="ws-session-empty">No sessions</div>'}
           </div>
         </div>`;
     };
@@ -1770,7 +1791,22 @@ class CWMApp {
     list.querySelectorAll('.workspace-item').forEach(el => {
       el.addEventListener('click', (e) => {
         if (e.target.closest('.ws-rename-btn') || e.target.closest('.ws-delete-btn')) return;
-        this.selectWorkspace(el.dataset.id);
+        const wsId = el.dataset.id;
+        this.selectWorkspace(wsId);
+
+        // Toggle accordion body
+        const accordion = el.closest('.workspace-accordion');
+        if (accordion) {
+          const body = accordion.querySelector('.workspace-accordion-body');
+          const chevron = el.querySelector('.ws-chevron');
+          const isOpen = body && !body.hidden;
+          // Close all other accordions
+          list.querySelectorAll('.workspace-accordion-body').forEach(b => b.hidden = true);
+          list.querySelectorAll('.ws-chevron').forEach(c => c.classList.remove('open'));
+          // Open this one (or close if it was already open)
+          if (body) body.hidden = isOpen;
+          if (chevron) chevron.classList.toggle('open', !isOpen);
+        }
       });
 
       // Context menu on workspace items
@@ -1789,6 +1825,26 @@ class CWMApp {
       el.addEventListener('dragend', () => {
         el.classList.remove('dragging');
       });
+    });
+
+    // Bind workspace session item events (drag to terminal, click to select)
+    list.querySelectorAll('.ws-session-item').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sessionId = el.dataset.sessionId;
+        const session = this.state.sessions.find(s => s.id === sessionId);
+        if (session) {
+          this.state.selectedSession = session;
+          this.renderSessionDetail(session);
+        }
+      });
+      el.addEventListener('dragstart', (e) => {
+        e.stopPropagation();
+        e.dataTransfer.setData('cwm/session', el.dataset.sessionId);
+        e.dataTransfer.effectAllowed = 'move';
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
     });
 
     list.querySelectorAll('.ws-rename-btn').forEach(btn => {
@@ -2242,16 +2298,19 @@ class CWMApp {
       if (projSessJson) {
         try {
           const ps = JSON.parse(projSessJson);
+          const claudeSessionId = ps.sessionName;
           await this.api('POST', '/api/sessions', {
-            name: ps.sessionName,
+            name: claudeSessionId,
             workspaceId,
             workingDir: ps.projectPath,
-            topic: '',
+            topic: 'Resumed session',
             command: 'claude',
+            resumeSessionId: claudeSessionId,
           });
-          this.showToast(`Session "${ps.sessionName}" created`, 'success');
+          this.showToast(`Session "${claudeSessionId}" added`, 'success');
           await this.loadSessions();
           await this.loadStats();
+          this.renderWorkspaces();
         } catch (err) {
           this.showToast(err.message || 'Failed to create session', 'error');
         }
@@ -2314,17 +2373,20 @@ class CWMApp {
                 this.showToast('Select or create a workspace first', 'warning');
                 return;
               }
+              // Use --resume with the Claude session ID (the .jsonl filename)
+              const claudeSessionId = ps.sessionName; // This IS the Claude session UUID
               const data = await this.api('POST', '/api/sessions', {
-                name: ps.sessionName,
+                name: claudeSessionId,
                 workspaceId: this.state.activeWorkspace.id,
                 workingDir: ps.projectPath,
-                topic: '',
+                topic: 'Resumed session',
                 command: 'claude',
+                resumeSessionId: claudeSessionId,
               });
               await this.loadSessions();
               await this.loadStats();
               if (data && data.session) {
-                this.openTerminalInPane(slotIdx, data.session.id, ps.sessionName);
+                this.openTerminalInPane(slotIdx, data.session.id, claudeSessionId);
               }
             } catch (err) {
               this.showToast(err.message || 'Failed to create session', 'error');

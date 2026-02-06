@@ -65,7 +65,7 @@ class PtySessionManager {
    * @param {boolean} [options.bypassPermissions=false] - If true, adds --dangerously-skip-permissions
    * @returns {PtySession} The PTY session object
    */
-  spawnSession(sessionId, { command = 'claude', cwd, cols = 120, rows = 30, bypassPermissions = false } = {}) {
+  spawnSession(sessionId, { command = 'claude', cwd, cols = 120, rows = 30, bypassPermissions = false, resumeSessionId = null, verbose = false, model = null } = {}) {
     // Return existing session if already alive
     const existing = this.sessions.get(sessionId);
     if (existing && existing.alive) {
@@ -74,8 +74,17 @@ class PtySessionManager {
 
     // Build full command string
     let fullCommand = command;
+    if (resumeSessionId) {
+      fullCommand += ' --resume ' + resumeSessionId;
+    }
     if (bypassPermissions) {
       fullCommand += ' --dangerously-skip-permissions';
+    }
+    if (verbose) {
+      fullCommand += ' --verbose';
+    }
+    if (model) {
+      fullCommand += ' --model ' + model;
     }
 
     // Spawn PTY process via cmd.exe on Windows
@@ -165,6 +174,10 @@ class PtySessionManager {
           session = this.spawnSession(sessionId, {
             command: storeSession.command || 'claude',
             cwd: storeSession.workingDir || undefined,
+            bypassPermissions: storeSession.bypassPermissions || false,
+            verbose: storeSession.verbose || false,
+            model: storeSession.model || null,
+            resumeSessionId: storeSession.resumeSessionId || null,
             ...spawnOpts,
           });
         } else {

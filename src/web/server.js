@@ -290,10 +290,10 @@ app.get('/api/sessions', requireAuth, (req, res) => {
 
 /**
  * POST /api/sessions
- * Body: { name, workspaceId, workingDir?, topic?, command? }
+ * Body: { name, workspaceId, workingDir?, topic?, command?, resumeSessionId? }
  */
 app.post('/api/sessions', requireAuth, (req, res) => {
-  const { name, workspaceId, workingDir, topic, command } = req.body || {};
+  const { name, workspaceId, workingDir, topic, command, resumeSessionId } = req.body || {};
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'Session name is required.' });
@@ -309,6 +309,7 @@ app.post('/api/sessions', requireAuth, (req, res) => {
     workingDir: workingDir || '',
     topic: topic || '',
     command: command || 'claude',
+    resumeSessionId: resumeSessionId || null,
   });
 
   if (!session) {

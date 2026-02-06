@@ -884,6 +884,78 @@ textarea.input {
   padding: 3px;
 }
 
+/* Workspace Accordion */
+.workspace-accordion {
+  margin-bottom: 1px;
+}
+
+.ws-chevron {
+  font-size: 8px;
+  color: var(--overlay0);
+  transition: transform var(--transition-fast);
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.ws-chevron.open {
+  transform: rotate(90deg);
+}
+
+.workspace-accordion-body {
+  padding: 0 0 4px 0;
+}
+
+.ws-session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 34px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ws-session-item:hover {
+  background: var(--surface0);
+  color: var(--text-primary);
+}
+
+.ws-session-item.dragging {
+  opacity: 0.4;
+}
+
+.ws-session-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ws-session-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.ws-session-time {
+  font-size: 10px;
+  color: var(--overlay0);
+  white-space: nowrap;
+}
+
+.ws-session-empty {
+  padding: 6px 12px 6px 34px;
+  font-size: 11px;
+  color: var(--overlay0);
+}
+
 
 /* ─── Main Content ──────────────────────────────────────────── */
 
