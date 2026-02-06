@@ -21,6 +21,8 @@ class CWMApp {
       projectsCollapsed: false,
       docs: null,
       docsRawMode: false,
+      hiddenSessions: new Set(JSON.parse(localStorage.getItem('cwm_hiddenSessions') || '[]')),
+      showHidden: false,
     };
 
     // ─── Terminal panes ──────────────────────────────────────────
@@ -64,6 +66,8 @@ class CWMApp {
       workspaceList: document.getElementById('workspace-list'),
       workspaceCount: document.getElementById('workspace-count'),
       createWorkspaceBtn: document.getElementById('create-workspace-btn'),
+      toggleHiddenBtn: document.getElementById('toggle-hidden-btn'),
+      toggleHiddenLabel: document.getElementById('toggle-hidden-label'),
 
       // Header
       viewTabs: document.querySelectorAll('.view-tab'),
@@ -171,6 +175,11 @@ class CWMApp {
     // Projects toggle
     if (this.els.projectsToggle) {
       this.els.projectsToggle.addEventListener('click', () => this.toggleProjectsPanel());
+    }
+
+    // Toggle hidden sessions
+    if (this.els.toggleHiddenBtn) {
+      this.els.toggleHiddenBtn.addEventListener('click', () => this.toggleShowHidden());
     }
 
     // Sidebar collapse (desktop)
@@ -711,26 +720,31 @@ class CWMApp {
     const session = this.state.sessions.find(s => s.id === id);
     if (!session) return;
 
-    const confirmed = await this.showConfirmModal({
-      title: 'Delete Session',
-      message: `Are you sure you want to delete <strong>${this.escapeHtml(session.name)}</strong>? This action cannot be undone.`,
-      confirmText: 'Delete',
-      confirmClass: 'btn-danger',
-    });
+    // Hide session — never delete. Persisted in localStorage.
+    this.state.hiddenSessions.add(id);
+    localStorage.setItem('cwm_hiddenSessions', JSON.stringify([...this.state.hiddenSessions]));
 
-    if (!confirmed) return;
-
-    try {
-      await this.api('DELETE', `/api/sessions/${id}`);
-      this.showToast('Session deleted', 'success');
-      if (this.state.selectedSession && this.state.selectedSession.id === id) {
-        this.deselectSession();
-      }
-      await this.loadSessions();
-      await this.loadStats();
-    } catch (err) {
-      this.showToast(err.message || 'Failed to delete session', 'error');
+    if (this.state.selectedSession && this.state.selectedSession.id === id) {
+      this.deselectSession();
     }
+    this.renderWorkspaces();
+    this.renderSessions();
+    this.showToast(`Hidden "${session.name}" — toggle "Show hidden" to see it again`, 'info');
+  }
+
+  unhideSession(id) {
+    this.state.hiddenSessions.delete(id);
+    localStorage.setItem('cwm_hiddenSessions', JSON.stringify([...this.state.hiddenSessions]));
+    this.renderWorkspaces();
+    this.renderSessions();
+  }
+
+  toggleShowHidden() {
+    this.state.showHidden = !this.state.showHidden;
+    if (this.els.toggleHiddenBtn) this.els.toggleHiddenBtn.classList.toggle('active', this.state.showHidden);
+    if (this.els.toggleHiddenLabel) this.els.toggleHiddenLabel.textContent = this.state.showHidden ? 'Hide hidden' : 'Show hidden';
+    this.renderWorkspaces();
+    this.renderSessions();
   }
 
   async startSession(id) {
@@ -797,25 +811,36 @@ class CWMApp {
 
     const items = [];
 
+    // Open in terminal (quick action)
+    items.push({
+      label: 'Open in Terminal', icon: '&#9654;', action: () => {
+        const emptySlot = this.terminalPanes.findIndex(p => p === null);
+        if (emptySlot !== -1) {
+          this.setViewMode('terminal');
+          this.openTerminalInPane(emptySlot, sessionId, session.name);
+        } else {
+          this.showToast('All terminal panes full. Close one first.', 'warning');
+        }
+      },
+    });
+
+    items.push({ type: 'sep' });
+
     if (!isRunning) {
-      // Stopped session: show start options
       items.push(
         { label: 'Start', icon: '&#9654;', action: () => this.startSession(sessionId) },
-        { label: 'Start (Bypass Permissions)', icon: '&#9888;', action: () => this.startSessionWithFlags(sessionId, { bypassPermissions: true }) },
-        { label: 'Start (Verbose)', icon: '&#128483;', action: () => this.startSessionWithFlags(sessionId, { verbose: true }) },
+        { label: 'Start (Bypass)', icon: '&#9888;', action: () => this.startSessionWithFlags(sessionId, { bypassPermissions: true }) },
       );
     } else {
-      // Running session: show restart options
       items.push(
         { label: 'Stop', icon: '&#9632;', action: () => this.stopSession(sessionId) },
         { label: 'Restart', icon: '&#8635;', action: () => this.restartSession(sessionId) },
-        { label: 'Restart (Bypass Permissions)', icon: '&#9888;', action: () => this.restartSessionWithFlags(sessionId, { bypassPermissions: true }) },
       );
     }
 
     items.push({ type: 'sep' });
 
-    // Model selection submenu
+    // Model selection
     items.push({ label: 'Model:', icon: '&#9881;', disabled: true });
     modelOptions.forEach(m => {
       items.push({
@@ -826,17 +851,12 @@ class CWMApp {
       });
     });
     if (currentModel) {
-      items.push({
-        label: '  Default',
-        icon: '&#183;',
-        action: () => this.setSessionModel(sessionId, null),
-        check: !currentModel,
-      });
+      items.push({ label: '  Default', icon: '&#183;', action: () => this.setSessionModel(sessionId, null), check: !currentModel });
     }
 
     items.push({ type: 'sep' });
 
-    // Flags toggles
+    // Flags
     items.push(
       { label: 'Bypass Permissions', icon: '&#9888;', action: () => this.toggleBypass(sessionId), check: isBypassed },
       { label: 'Verbose', icon: '&#128483;', action: () => this.toggleVerbose(sessionId), check: isVerbose },
@@ -844,11 +864,21 @@ class CWMApp {
 
     items.push({ type: 'sep' });
 
-    // Standard actions
+    // Actions
     items.push(
       { label: 'Edit', icon: '&#9998;', action: () => this.renameSession(sessionId) },
-      { label: 'Delete', icon: '&#10005;', action: () => this.deleteSession(sessionId), danger: true },
+      { label: 'Copy Session ID', icon: '&#128203;', action: () => {
+        navigator.clipboard.writeText(session.resumeSessionId || session.id);
+        this.showToast('Session ID copied', 'success');
+      }},
     );
+
+    const isSessionHidden = this.state.hiddenSessions.has(sessionId);
+    if (isSessionHidden) {
+      items.push({ label: 'Unhide', icon: '&#128065;', action: () => this.unhideSession(sessionId) });
+    } else {
+      items.push({ label: 'Hide', icon: '&#128065;', action: () => this.deleteSession(sessionId) });
+    }
 
     const container = this.els.contextMenuItems;
     container.innerHTML = items.map(item => {
@@ -1762,15 +1792,18 @@ class CWMApp {
     const renderWorkspaceItem = (ws) => {
       const isActive = this.state.activeWorkspace && this.state.activeWorkspace.id === ws.id;
       const color = colorMap[ws.color] || colorMap.mauve;
-      const wsSessions = this.state.sessions.filter(s => s.workspaceId === ws.id);
+      const allWsSessions = this.state.sessions.filter(s => s.workspaceId === ws.id);
+      const wsSessions = allWsSessions.filter(s => this.state.showHidden || !this.state.hiddenSessions.has(s.id));
+      const hiddenCount = allWsSessions.length - wsSessions.length;
       const sessionCount = wsSessions.length;
 
       // Build session sub-items for accordion
       const sessionItems = wsSessions.map(s => {
+        const isHidden = this.state.hiddenSessions.has(s.id);
         const statusDot = s.status === 'running' ? 'var(--green)' : 'var(--overlay0)';
         const name = s.name || s.id.substring(0, 12);
         const timeStr = s.lastActive ? this.relativeTime(s.lastActive) : '';
-        return `<div class="ws-session-item" data-session-id="${s.id}" draggable="true" title="${this.escapeHtml(s.workingDir || '')}">
+        return `<div class="ws-session-item${isHidden ? ' ws-session-hidden' : ''}" data-session-id="${s.id}" draggable="true" title="${this.escapeHtml(s.workingDir || '')}">
           <span class="ws-session-dot" style="background: ${statusDot}"></span>
           <span class="ws-session-name">${this.escapeHtml(name.length > 22 ? name.substring(0, 22) + '...' : name)}</span>
           ${timeStr ? `<span class="ws-session-time">${timeStr}</span>` : ''}
@@ -1886,13 +1919,33 @@ class CWMApp {
         e.stopPropagation();
         const sessionId = el.dataset.sessionId;
         const session = this.state.sessions.find(s => s.id === sessionId);
-        if (session) {
+        if (!session) return;
+
+        if (this.state.viewMode === 'terminal') {
+          // In terminal view, clicking a session opens it in the next empty terminal pane
+          const emptySlot = this.terminalPanes.findIndex(p => p === null);
+          if (emptySlot !== -1) {
+            if (!session.resumeSessionId) {
+              this.showToast('Starting new Claude session (no previous conversation to resume)', 'info');
+            }
+            this.openTerminalInPane(emptySlot, sessionId, session.name);
+          } else {
+            this.showToast('All terminal panes are full. Close one first.', 'warning');
+          }
+        } else {
           this.state.selectedSession = session;
-          this.renderSessionDetail(session);
+          this.renderSessionDetail();
         }
+      });
+      // Right-click context menu on sidebar session items
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.showContextMenu(el.dataset.sessionId, e.clientX, e.clientY);
       });
       el.addEventListener('dragstart', (e) => {
         e.stopPropagation();
+        console.log('[DnD] Drag started: ws-session-item', el.dataset.sessionId);
         e.dataTransfer.setData('cwm/session', el.dataset.sessionId);
         e.dataTransfer.effectAllowed = 'move';
         el.classList.add('dragging');
@@ -1939,7 +1992,32 @@ class CWMApp {
       action: () => this.moveWorkspaceToGroup(workspaceId, g.id),
     }));
 
+    const wsSessions = this.state.sessions.filter(s => s.workspaceId === workspaceId);
+    const visibleSessions = wsSessions.filter(s => !this.state.hiddenSessions.has(s.id));
+
     const items = [
+      // Quick actions
+      { label: 'Open Terminal', icon: '&#9654;', action: () => {
+        const emptySlot = this.terminalPanes.findIndex(p => p === null);
+        if (emptySlot === -1) { this.showToast('All terminal panes full', 'warning'); return; }
+        // Create a new session in this workspace and open terminal
+        this.api('POST', '/api/sessions', { name: `${ws.name} terminal`, workspaceId }).then(data => {
+          if (data && data.session) {
+            this.loadSessions();
+            this.setViewMode('terminal');
+            this.openTerminalInPane(emptySlot, data.session.id, ws.name);
+          }
+        }).catch(err => this.showToast(err.message, 'error'));
+      }},
+      { label: 'View Docs', icon: '&#128196;', action: () => {
+        this.selectWorkspace(workspaceId);
+        this.setViewMode('docs');
+      }},
+      { label: 'Add Session', icon: '&#43;', action: () => {
+        this.selectWorkspace(workspaceId);
+        this.createSession();
+      }},
+      { type: 'sep' },
       { label: 'Edit', icon: '&#9998;', action: () => this.renameWorkspace(workspaceId) },
       { type: 'sep' },
       ...(groupItems.length > 0 ? [
@@ -1948,9 +2026,22 @@ class CWMApp {
         { type: 'sep' },
       ] : []),
       { label: 'New Group...', icon: '&#43;', action: () => this.createGroup() },
-      { type: 'sep' },
-      { label: 'Delete', icon: '&#10005;', action: () => this.deleteWorkspace(workspaceId), danger: true },
     ];
+
+    // Hide all sessions
+    if (visibleSessions.length > 0) {
+      items.push({ type: 'sep' });
+      items.push({ label: `Hide All Sessions (${visibleSessions.length})`, icon: '&#128065;', action: () => {
+        visibleSessions.forEach(s => this.state.hiddenSessions.add(s.id));
+        localStorage.setItem('cwm_hiddenSessions', JSON.stringify([...this.state.hiddenSessions]));
+        this.renderWorkspaces();
+        this.renderSessions();
+        this.showToast(`Hidden ${visibleSessions.length} sessions`, 'info');
+      }});
+    }
+
+    items.push({ type: 'sep' });
+    items.push({ label: 'Delete Workspace', icon: '&#10005;', action: () => this.deleteWorkspace(workspaceId), danger: true });
 
     const container = this.els.contextMenuItems;
     container.innerHTML = items.map(item => {
@@ -2022,7 +2113,7 @@ class CWMApp {
 
   renderSessions() {
     const list = this.els.sessionList;
-    const sessions = this.state.sessions;
+    const sessions = this.state.sessions.filter(s => this.state.showHidden || !this.state.hiddenSessions.has(s.id));
     const empty = this.els.sessionEmpty;
 
     if (sessions.length === 0) {
@@ -2088,7 +2179,8 @@ class CWMApp {
 
   renderSessionDetail() {
     const session = this.state.selectedSession;
-    if (!session) {
+    // Never show detail panel in terminal or docs view
+    if (!session || this.state.viewMode === 'terminal' || this.state.viewMode === 'docs') {
       this.els.detailPanel.hidden = true;
       return;
     }
@@ -2316,6 +2408,7 @@ class CWMApp {
     this.els.sessionList.addEventListener('dragstart', (e) => {
       const item = e.target.closest('.session-item');
       if (!item) return;
+      console.log('[DnD] Drag started: session-item', item.dataset.id);
       e.dataTransfer.setData('cwm/session', item.dataset.id);
       e.dataTransfer.effectAllowed = 'move';
       item.classList.add('dragging');
@@ -2393,9 +2486,19 @@ class CWMApp {
 
     // Terminal panes: accept session and project drops
     if (this.els.terminalGrid) {
-      this.els.terminalGrid.querySelectorAll('.terminal-pane').forEach((pane, slotIdx) => {
+      const panes = this.els.terminalGrid.querySelectorAll('.terminal-pane');
+      console.log('[DnD] Setting up drop handlers on', panes.length, 'terminal panes');
+      panes.forEach((pane, slotIdx) => {
+        // Helper: check if drag types contain a value (works with both Array and DOMStringList)
+        const hasType = (types, val) => {
+          if (types.includes) return types.includes(val);
+          if (types.contains) return types.contains(val);
+          for (let i = 0; i < types.length; i++) { if (types[i] === val) return true; }
+          return false;
+        };
+
         pane.addEventListener('dragover', (e) => {
-          if (e.dataTransfer.types.includes('cwm/session') || e.dataTransfer.types.includes('cwm/project') || e.dataTransfer.types.includes('cwm/project-session')) {
+          if (hasType(e.dataTransfer.types, 'cwm/session') || hasType(e.dataTransfer.types, 'cwm/project') || hasType(e.dataTransfer.types, 'cwm/project-session') || hasType(e.dataTransfer.types, 'cwm/workspace')) {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             pane.classList.add('drag-over');
@@ -2407,14 +2510,15 @@ class CWMApp {
         pane.addEventListener('drop', async (e) => {
           e.preventDefault();
           pane.classList.remove('drag-over');
+          console.log('[DnD] Drop on pane', slotIdx, 'types:', Array.from(e.dataTransfer.types));
 
           // Drop an app session into terminal pane
           const sessionId = e.dataTransfer.getData('cwm/session');
           if (sessionId) {
+            console.log('[DnD] Session drop:', sessionId);
             const session = this.state.sessions.find(s => s.id === sessionId);
             if (session && !session.resumeSessionId) {
-              this.showToast('This session has no Claude conversation to resume. Drag a project session from the Projects panel instead.', 'warning');
-              return;
+              this.showToast('Starting new Claude session (no previous conversation to resume)', 'info');
             }
             this.openTerminalInPane(slotIdx, sessionId, session ? session.name : 'Terminal');
             return;
@@ -2475,6 +2579,30 @@ class CWMApp {
             } catch (err) {
               this.showToast(err.message || 'Failed to create session', 'error');
             }
+            return;
+          }
+
+          // Drop a workspace into terminal pane — start a new Claude session
+          const workspaceId = e.dataTransfer.getData('cwm/workspace');
+          if (workspaceId) {
+            console.log('[DnD] Workspace drop:', workspaceId);
+            try {
+              const ws = this.state.workspaces.find(w => w.id === workspaceId);
+              const wsName = ws ? ws.name : 'Workspace';
+              const data = await this.api('POST', '/api/sessions', {
+                name: `${wsName} terminal`,
+                workspaceId: workspaceId,
+                topic: '',
+                command: 'claude',
+              });
+              await this.loadSessions();
+              await this.loadStats();
+              if (data && data.session) {
+                this.openTerminalInPane(slotIdx, data.session.id, wsName);
+              }
+            } catch (err) {
+              this.showToast(err.message || 'Failed to create session', 'error');
+            }
           }
         });
 
@@ -2493,6 +2621,7 @@ class CWMApp {
      ═══════════════════════════════════════════════════════════ */
 
   openTerminalInPane(slotIdx, sessionId, sessionName) {
+    console.log('[DnD] openTerminalInPane slot:', slotIdx, 'session:', sessionId, 'name:', sessionName);
     // If the target slot already has an active terminal, find the next empty slot
     if (this.terminalPanes[slotIdx]) {
       const emptySlot = this.terminalPanes.findIndex(p => p === null);
@@ -2528,8 +2657,12 @@ class CWMApp {
   }
 
   closeTerminalPane(slotIdx) {
-    if (this.terminalPanes[slotIdx]) {
-      this.terminalPanes[slotIdx].dispose();
+    const tp = this.terminalPanes[slotIdx];
+    const sessionName = tp ? tp.sessionName : '';
+
+    if (tp) {
+      // Dispose disconnects the WebSocket but the PTY keeps running in the background
+      tp.dispose();
       this.terminalPanes[slotIdx] = null;
     }
 
@@ -2546,6 +2679,10 @@ class CWMApp {
     if (container) container.innerHTML = '';
 
     this.updateTerminalGridLayout();
+
+    if (sessionName) {
+      this.showToast(`"${sessionName}" moved to background — drag it back to reconnect`, 'info');
+    }
   }
 
   updateTerminalGridLayout() {

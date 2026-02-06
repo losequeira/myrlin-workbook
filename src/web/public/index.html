@@ -164,6 +164,10 @@
         <div class="sidebar-footer">
           <div class="sidebar-meta" id="sidebar-meta">
             <span id="workspace-count">0 workspaces</span>
+            <button class="btn btn-ghost btn-sm toggle-hidden-btn" id="toggle-hidden-btn" title="Toggle hidden sessions">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3C4.5 3 1.7 5.1 1 8c.7 2.9 3.5 5 7 5s6.3-2.1 7-5c-.7-2.9-3.5-5-7-5zm0 8a3 3 0 110-6 3 3 0 010 6zm0-5a2 2 0 100 4 2 2 0 000-4z"/></svg>
+              <span id="toggle-hidden-label">Show hidden</span>
+            </button>
           </div>
         </div>
         <div class="sidebar-divider"></div>
@@ -243,7 +247,7 @@
                   <path d="M8.5 2.5l3 3M2 9.5V12h2.5L11 5.5l-3-3L2 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </button>
-              <button class="btn btn-ghost btn-icon btn-sm btn-danger-hover" id="detail-delete-btn" title="Delete session">
+              <button class="btn btn-ghost btn-icon btn-sm" id="detail-delete-btn" title="Hide session">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <path d="M2.5 4h9M5 4V2.5h4V4M3.5 4v7.5a1 1 0 001 1h5a1 1 0 001-1V4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>

@@ -104,6 +104,18 @@ class TerminalPane {
         this.connect();
       });
 
+      // Intercept Shift+Enter to send newline instead of carriage return
+      // This lets Claude Code receive a "next line" signal rather than "submit"
+      this.term.attachCustomKeyEventHandler((e) => {
+        if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey) {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'input', data: '\n' }));
+          }
+          return false; // prevent xterm default Enter handling
+        }
+        return true; // let xterm handle everything else
+      });
+
       this.term.onData((data) => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: 'input', data }));

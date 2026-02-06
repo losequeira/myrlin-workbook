@@ -955,6 +955,17 @@ textarea.input {
   font-size: 11px;
   color: var(--overlay0);
 }
+.ws-session-hidden {
+  opacity: 0.4;
+}
+.toggle-hidden-btn {
+  font-size: 11px !important;
+  gap: 4px;
+  color: var(--overlay0) !important;
+}
+.toggle-hidden-btn.active {
+  color: var(--mauve) !important;
+}
 
 
 /* ─── Main Content ──────────────────────────────────────────── */

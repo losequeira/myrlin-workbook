@@ -13,7 +13,7 @@
 const crypto = require('crypto');
 
 // ─── Configuration ─────────────────────────────────────────
-const AUTH_PASSWORD = 'L3x1ngt0n69thstreet!';
+const AUTH_PASSWORD = 'Sparktech123!';
 const TOKEN_BYTE_LENGTH = 32;
 
 // In-memory set of valid tokens. Tokens survive for the lifetime of
