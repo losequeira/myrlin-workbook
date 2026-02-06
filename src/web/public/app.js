@@ -2496,16 +2496,26 @@ class CWMApp {
     if (!grid) return;
 
     const filledCount = this.terminalPanes.filter(p => p !== null).length;
-    // Show: filled panes + 1 empty drop target, capped at 4
-    const visibleCount = Math.min(4, Math.max(1, filledCount + (filledCount < 4 ? 1 : 0)));
+    // Show only filled panes. If none, show 1 empty drop target.
+    // No pre-split empty panes — the grid only grows when sessions are added.
+    const visibleCount = Math.max(1, filledCount);
 
     grid.setAttribute('data-panes', visibleCount.toString());
 
-    // Show/hide individual panes
+    // Show/hide individual panes: show filled ones + 1 empty drop target if room
     for (let i = 0; i < 4; i++) {
       const paneEl = document.getElementById(`term-pane-${i}`);
-      if (paneEl) {
-        paneEl.hidden = i >= visibleCount;
+      if (!paneEl) continue;
+
+      if (this.terminalPanes[i]) {
+        // Filled pane — always show
+        paneEl.hidden = false;
+      } else if (filledCount === 0 && i === 0) {
+        // No sessions at all — show first pane as drop target
+        paneEl.hidden = false;
+      } else {
+        // Empty pane — hide it
+        paneEl.hidden = true;
       }
     }
 
