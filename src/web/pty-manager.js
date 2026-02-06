@@ -12,6 +12,9 @@
  */
 
 const pty = require('node-pty');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { getStore } = require('../state/store');
 
 // Maximum scrollback buffer size in total characters
@@ -92,13 +95,43 @@ class PtySessionManager {
       fullCommand += ' --model ' + model;
     }
 
+    // Validate cwd exists — fall back to home directory if not
+    let resolvedCwd = cwd || process.cwd();
+    try {
+      if (!fs.existsSync(resolvedCwd) || !fs.statSync(resolvedCwd).isDirectory()) {
+        console.log(`[PTY] cwd "${resolvedCwd}" does not exist or is not a directory, falling back to home`);
+        resolvedCwd = os.homedir();
+      }
+    } catch (e) {
+      console.log(`[PTY] cwd check failed for "${resolvedCwd}": ${e.message}, falling back to home`);
+      resolvedCwd = os.homedir();
+    }
+
+    // Inject workspace documentation env vars so AI sessions can read/write docs
+    const sessionEnv = { ...process.env };
+    try {
+      const store = getStore();
+      const storeSession = store.getSession(sessionId);
+      if (storeSession && storeSession.workspaceId) {
+        const docsManager = require('../state/docs-manager');
+        sessionEnv.CWM_WORKSPACE_DOCS_PATH = docsManager.getDocsPath(storeSession.workspaceId);
+        sessionEnv.CWM_WORKSPACE_ID = storeSession.workspaceId;
+        const port = process.env.PORT || process.env.CWM_PORT || '3456';
+        sessionEnv.CWM_DOCS_API_BASE = `http://localhost:${port}/api/workspaces/${storeSession.workspaceId}/docs`;
+      }
+    } catch (_) {
+      // Non-critical — session can work without docs integration
+    }
+
+    console.log(`[PTY] Spawning: cmd.exe /k ${fullCommand} (cwd: ${resolvedCwd})`);
+
     // Spawn PTY process via cmd.exe on Windows
     const ptyProcess = pty.spawn('cmd.exe', ['/k', fullCommand], {
       name: 'xterm-256color',
       cols,
       rows,
-      cwd: cwd || process.cwd(),
-      env: process.env,
+      cwd: resolvedCwd,
+      env: sessionEnv,
       useConpty: true,
     });
 
@@ -192,8 +225,16 @@ class PtySessionManager {
           session = this.spawnSession(sessionId, spawnOpts);
         }
       } catch (err) {
+        const reason = 'PTY spawn failed: ' + (err.message || 'unknown error');
         console.error(`[PTY] Failed to spawn session ${sessionId}:`, err.message);
-        try { ws.close(1011, 'Failed to spawn PTY session'); } catch (_) {}
+        console.error(`[PTY] Stack:`, err.stack);
+        // Send error as JSON message before closing so the client gets the real reason
+        try {
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'error', message: reason }));
+          }
+        } catch (_) {}
+        try { ws.close(1011, reason.substring(0, 123)); } catch (_) {}
         return;
       }
     }

@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
+const docsManager = require('./docs-manager');
 
 const STATE_DIR = path.join(__dirname, '..', '..', 'state');
 const STATE_FILE = path.join(STATE_DIR, 'workspaces.json');
@@ -47,6 +48,7 @@ class Store extends EventEmitter {
     if (!fs.existsSync(STATE_DIR)) {
       fs.mkdirSync(STATE_DIR, { recursive: true });
     }
+    docsManager.ensureDocsDir();
     this._state = this._load();
     return this;
   }
@@ -186,6 +188,8 @@ class Store extends EventEmitter {
       const remaining = Object.keys(this._state.workspaces);
       this._state.activeWorkspace = remaining.length > 0 ? remaining[0] : null;
     }
+    // Clean up workspace documentation file
+    docsManager.deleteDocs(id);
     this._debouncedSave();
     this.emit('workspace:deleted', { id });
     return true;
@@ -426,6 +430,93 @@ class Store extends EventEmitter {
    */
   getAllGroups() {
     return Object.values(this._state.workspaceGroups);
+  }
+
+  // ─── Workspace Documentation ─────────────────────────────
+
+  /**
+   * Get parsed documentation for a workspace.
+   * @param {string} workspaceId
+   * @returns {{ raw: string, notes: Array, goals: Array, tasks: Array } | null}
+   */
+  getWorkspaceDocs(workspaceId) {
+    if (!this._state.workspaces[workspaceId]) return null;
+    return docsManager.readDocs(workspaceId);
+  }
+
+  /**
+   * Replace the entire workspace documentation with raw markdown.
+   * @param {string} workspaceId
+   * @param {string} content - Raw markdown
+   */
+  updateWorkspaceDocs(workspaceId, content) {
+    if (!this._state.workspaces[workspaceId]) return null;
+    docsManager.writeDocs(workspaceId, content);
+    this.emit('docs:updated', { workspaceId });
+  }
+
+  /**
+   * Add a timestamped note to workspace documentation.
+   * @param {string} workspaceId
+   * @param {string} text
+   */
+  addWorkspaceNote(workspaceId, text) {
+    const ws = this._state.workspaces[workspaceId];
+    if (!ws) return null;
+    docsManager.appendNote(workspaceId, ws.name, text);
+    this.emit('docs:updated', { workspaceId, section: 'notes' });
+  }
+
+  /**
+   * Add a goal to workspace documentation.
+   * @param {string} workspaceId
+   * @param {string} text
+   */
+  addWorkspaceGoal(workspaceId, text) {
+    const ws = this._state.workspaces[workspaceId];
+    if (!ws) return null;
+    docsManager.appendGoal(workspaceId, ws.name, text);
+    this.emit('docs:updated', { workspaceId, section: 'goals' });
+  }
+
+  /**
+   * Add a task to workspace documentation.
+   * @param {string} workspaceId
+   * @param {string} text
+   */
+  addWorkspaceTask(workspaceId, text) {
+    const ws = this._state.workspaces[workspaceId];
+    if (!ws) return null;
+    docsManager.appendTask(workspaceId, ws.name, text);
+    this.emit('docs:updated', { workspaceId, section: 'tasks' });
+  }
+
+  /**
+   * Toggle done state of a goal or task.
+   * @param {string} workspaceId
+   * @param {string} section - 'goals' or 'tasks'
+   * @param {number} index
+   */
+  toggleWorkspaceItem(workspaceId, section, index) {
+    const ws = this._state.workspaces[workspaceId];
+    if (!ws) return false;
+    const result = docsManager.toggleItem(workspaceId, ws.name, section, index);
+    if (result) this.emit('docs:updated', { workspaceId, section });
+    return result;
+  }
+
+  /**
+   * Remove an item from workspace documentation.
+   * @param {string} workspaceId
+   * @param {string} section - 'notes', 'goals', or 'tasks'
+   * @param {number} index
+   */
+  removeWorkspaceItem(workspaceId, section, index) {
+    const ws = this._state.workspaces[workspaceId];
+    if (!ws) return false;
+    const result = docsManager.removeItem(workspaceId, ws.name, section, index);
+    if (result) this.emit('docs:updated', { workspaceId, section });
+    return result;
   }
 
   // ─── Settings ────────────────────────────────────────────

@@ -101,6 +101,13 @@
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm3.5 1a.5.5 0 0 0-.354.854l2.5 2.5a.5.5 0 0 0 .708 0l2.5-2.5A.5.5 0 0 0 8.5 3h-5z"/></svg>
             Terminal
           </button>
+          <button class="view-tab" data-mode="docs" role="tab" aria-selected="false">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M4 1h8a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+            Docs
+          </button>
         </nav>
       </div>
 
@@ -348,6 +355,61 @@
               </button>
             </div>
             <div class="terminal-container" id="term-container-3"></div>
+          </div>
+        </div>
+
+        <!-- Workspace Documentation Panel -->
+        <div class="docs-panel" id="docs-panel" hidden>
+          <div class="docs-header">
+            <div class="docs-header-left">
+              <h2 class="docs-title">Documentation</h2>
+              <span class="docs-workspace-name" id="docs-workspace-name"></span>
+            </div>
+            <div class="docs-header-right">
+              <button class="btn btn-ghost btn-sm" id="docs-toggle-raw" title="Toggle raw markdown editor">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4l3 4-3 4M8 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Raw
+              </button>
+              <button class="btn btn-primary btn-sm" id="docs-save-btn" hidden>Save</button>
+            </div>
+          </div>
+
+          <!-- Structured View -->
+          <div class="docs-structured" id="docs-structured">
+            <div class="docs-section" data-section="notes">
+              <div class="docs-section-header">
+                <span class="docs-section-chevron open">&#9654;</span>
+                <h3 class="docs-section-title">Notes</h3>
+                <span class="docs-section-count" id="docs-notes-count">0</span>
+                <button class="btn btn-ghost btn-icon btn-sm docs-add-btn" data-section="notes" title="Add note">+</button>
+              </div>
+              <div class="docs-section-body" id="docs-notes-list"></div>
+            </div>
+
+            <div class="docs-section" data-section="goals">
+              <div class="docs-section-header">
+                <span class="docs-section-chevron open">&#9654;</span>
+                <h3 class="docs-section-title">Goals</h3>
+                <span class="docs-section-count" id="docs-goals-count">0</span>
+                <button class="btn btn-ghost btn-icon btn-sm docs-add-btn" data-section="goals" title="Add goal">+</button>
+              </div>
+              <div class="docs-section-body" id="docs-goals-list"></div>
+            </div>
+
+            <div class="docs-section" data-section="tasks">
+              <div class="docs-section-header">
+                <span class="docs-section-chevron open">&#9654;</span>
+                <h3 class="docs-section-title">Tasks</h3>
+                <span class="docs-section-count" id="docs-tasks-count">0</span>
+                <button class="btn btn-ghost btn-icon btn-sm docs-add-btn" data-section="tasks" title="Add task">+</button>
+              </div>
+              <div class="docs-section-body" id="docs-tasks-list"></div>
+            </div>
+          </div>
+
+          <!-- Raw Editor View -->
+          <div class="docs-raw" id="docs-raw" hidden>
+            <textarea class="docs-raw-editor" id="docs-raw-editor" placeholder="# Workspace Documentation&#10;&#10;## Notes&#10;&#10;## Goals&#10;&#10;## Tasks" spellcheck="false"></textarea>
           </div>
         </div>
 

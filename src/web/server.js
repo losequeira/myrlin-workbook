@@ -159,6 +159,140 @@ app.post('/api/workspaces/:id/activate', requireAuth, (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────
+//  WORKSPACE DOCUMENTATION
+// ──────────────────────────────────────────────────────────
+
+/**
+ * GET /api/workspaces/:id/docs
+ * Returns parsed documentation for a workspace.
+ */
+app.get('/api/workspaces/:id/docs', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const docs = store.getWorkspaceDocs(req.params.id);
+  if (!docs) {
+    return res.json({ raw: null, notes: [], goals: [], tasks: [] });
+  }
+  return res.json(docs);
+});
+
+/**
+ * PUT /api/workspaces/:id/docs
+ * Body: { content: "raw markdown" }
+ * Replaces the entire documentation.
+ */
+app.put('/api/workspaces/:id/docs', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { content } = req.body || {};
+  if (typeof content !== 'string') {
+    return res.status(400).json({ error: 'content (string) is required.' });
+  }
+  store.updateWorkspaceDocs(req.params.id, content);
+  const docs = store.getWorkspaceDocs(req.params.id);
+  return res.json(docs);
+});
+
+/**
+ * POST /api/workspaces/:id/docs/notes
+ * Body: { text }
+ */
+app.post('/api/workspaces/:id/docs/notes', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { text } = req.body || {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required.' });
+  }
+  store.addWorkspaceNote(req.params.id, text.trim());
+  return res.status(201).json({ success: true });
+});
+
+/**
+ * POST /api/workspaces/:id/docs/goals
+ * Body: { text }
+ */
+app.post('/api/workspaces/:id/docs/goals', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { text } = req.body || {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required.' });
+  }
+  store.addWorkspaceGoal(req.params.id, text.trim());
+  return res.status(201).json({ success: true });
+});
+
+/**
+ * POST /api/workspaces/:id/docs/tasks
+ * Body: { text }
+ */
+app.post('/api/workspaces/:id/docs/tasks', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { text } = req.body || {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required.' });
+  }
+  store.addWorkspaceTask(req.params.id, text.trim());
+  return res.status(201).json({ success: true });
+});
+
+/**
+ * PUT /api/workspaces/:id/docs/:section/:index
+ * Toggle done state of a goal or task.
+ */
+app.put('/api/workspaces/:id/docs/:section/:index', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { section, index } = req.params;
+  if (!['goals', 'tasks'].includes(section)) {
+    return res.status(400).json({ error: 'Section must be "goals" or "tasks".' });
+  }
+  const idx = parseInt(index, 10);
+  if (isNaN(idx) || idx < 0) {
+    return res.status(400).json({ error: 'Invalid index.' });
+  }
+  const result = store.toggleWorkspaceItem(req.params.id, section, idx);
+  if (!result) return res.status(404).json({ error: 'Item not found at index.' });
+  return res.json({ success: true });
+});
+
+/**
+ * DELETE /api/workspaces/:id/docs/:section/:index
+ * Remove an item by section and index.
+ */
+app.delete('/api/workspaces/:id/docs/:section/:index', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { section, index } = req.params;
+  if (!['notes', 'goals', 'tasks'].includes(section)) {
+    return res.status(400).json({ error: 'Section must be "notes", "goals", or "tasks".' });
+  }
+  const idx = parseInt(index, 10);
+  if (isNaN(idx) || idx < 0) {
+    return res.status(400).json({ error: 'Invalid index.' });
+  }
+  const result = store.removeWorkspaceItem(req.params.id, section, idx);
+  if (!result) return res.status(404).json({ error: 'Item not found at index.' });
+  return res.json({ success: true });
+});
+
+// ──────────────────────────────────────────────────────────
 //  WORKSPACE GROUPS
 // ──────────────────────────────────────────────────────────
 
@@ -656,7 +790,8 @@ app.get('/api/events', (req, res) => {
  */
 function broadcastSSE(eventType, data) {
   const payload = JSON.stringify({ type: eventType, data, timestamp: new Date().toISOString() });
-  const message = `event: ${eventType}\ndata: ${payload}\n\n`;
+  // Send as unnamed event so EventSource.onmessage fires (named events require addEventListener per type)
+  const message = `data: ${payload}\n\n`;
 
   for (const client of sseClients) {
     try {
@@ -689,6 +824,7 @@ function attachStoreEvents() {
     'group:updated',
     'group:deleted',
     'workspaces:reordered',
+    'docs:updated',
   ];
 
   for (const eventName of events) {

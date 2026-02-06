@@ -19,6 +19,8 @@ class CWMApp {
       notifications: [],
       sidebarOpen: false,
       projectsCollapsed: false,
+      docs: null,
+      docsRawMode: false,
     };
 
     // ─── Terminal panes ──────────────────────────────────────────
@@ -129,6 +131,21 @@ class CWMApp {
       // Sidebar resize & collapse
       sidebarResizeHandle: document.getElementById('sidebar-resize-handle'),
       sidebarCollapseBtn: document.getElementById('sidebar-collapse-btn'),
+
+      // Docs panel
+      docsPanel: document.getElementById('docs-panel'),
+      docsWorkspaceName: document.getElementById('docs-workspace-name'),
+      docsToggleRaw: document.getElementById('docs-toggle-raw'),
+      docsSaveBtn: document.getElementById('docs-save-btn'),
+      docsStructured: document.getElementById('docs-structured'),
+      docsRaw: document.getElementById('docs-raw'),
+      docsRawEditor: document.getElementById('docs-raw-editor'),
+      docsNotesList: document.getElementById('docs-notes-list'),
+      docsGoalsList: document.getElementById('docs-goals-list'),
+      docsTasksList: document.getElementById('docs-tasks-list'),
+      docsNotesCount: document.getElementById('docs-notes-count'),
+      docsGoalsCount: document.getElementById('docs-goals-count'),
+      docsTasksCount: document.getElementById('docs-tasks-count'),
     };
   }
 
@@ -210,6 +227,29 @@ class CWMApp {
     this.els.modalCancelBtn.addEventListener('click', () => this.closeModal(null));
     this.els.modalOverlay.addEventListener('click', (e) => {
       if (e.target === this.els.modalOverlay) this.closeModal(null);
+    });
+
+    // Docs panel
+    if (this.els.docsToggleRaw) {
+      this.els.docsToggleRaw.addEventListener('click', () => this.toggleDocsRawMode());
+    }
+    if (this.els.docsSaveBtn) {
+      this.els.docsSaveBtn.addEventListener('click', () => this.saveDocsRaw());
+    }
+    document.querySelectorAll('.docs-add-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.addDocsItem(btn.dataset.section);
+      });
+    });
+    document.querySelectorAll('.docs-section-header').forEach(header => {
+      header.addEventListener('click', (e) => {
+        if (e.target.closest('.docs-add-btn')) return;
+        const body = header.nextElementSibling;
+        const chevron = header.querySelector('.docs-section-chevron');
+        if (body) body.hidden = !body.hidden;
+        if (chevron) chevron.classList.toggle('open');
+      });
     });
 
     // Global keyboard shortcuts
@@ -1103,15 +1143,21 @@ class CWMApp {
       tab.setAttribute('aria-selected', isActive);
     });
 
-    // Toggle terminal grid vs session panels
+    // Toggle terminal grid vs session panels vs docs
     const isTerminal = mode === 'terminal';
-    this.els.sessionListPanel.hidden = isTerminal;
-    this.els.detailPanel.hidden = isTerminal || !this.state.selectedSession;
+    const isDocs = mode === 'docs';
+    this.els.sessionListPanel.hidden = isTerminal || isDocs;
+    this.els.detailPanel.hidden = isTerminal || isDocs || !this.state.selectedSession;
     if (this.els.terminalGrid) {
       this.els.terminalGrid.hidden = !isTerminal;
     }
+    if (this.els.docsPanel) {
+      this.els.docsPanel.hidden = !isDocs;
+    }
 
-    if (!isTerminal) {
+    if (isDocs) {
+      this.loadDocs();
+    } else if (!isTerminal) {
       // Update panel title
       const titles = { workspace: 'Sessions', all: 'All Sessions', recent: 'Recent Sessions' };
       this.els.sessionPanelTitle.textContent = titles[mode] || 'Sessions';
@@ -1670,6 +1716,13 @@ class CWMApp {
         if (data.stats) {
           this.state.stats = data.stats;
           this.renderStats();
+        }
+        break;
+      case 'docs:updated':
+        // Reload docs if we're viewing docs for the updated workspace
+        if (this.state.viewMode === 'docs' && this.state.activeWorkspace &&
+            data.data && data.data.workspaceId === this.state.activeWorkspace.id) {
+          this.loadDocs();
         }
         break;
       default:
@@ -2359,6 +2412,10 @@ class CWMApp {
           const sessionId = e.dataTransfer.getData('cwm/session');
           if (sessionId) {
             const session = this.state.sessions.find(s => s.id === sessionId);
+            if (session && !session.resumeSessionId) {
+              this.showToast('This session has no Claude conversation to resume. Drag a project session from the Projects panel instead.', 'warning');
+              return;
+            }
             this.openTerminalInPane(slotIdx, sessionId, session ? session.name : 'Terminal');
             return;
           }
@@ -2496,13 +2553,14 @@ class CWMApp {
     if (!grid) return;
 
     const filledCount = this.terminalPanes.filter(p => p !== null).length;
-    // Show only filled panes. If none, show 1 empty drop target.
-    // No pre-split empty panes — the grid only grows when sessions are added.
-    const visibleCount = Math.max(1, filledCount);
+    // Show filled panes + 1 empty drop target (so users can always add more).
+    // If none filled, show 1 empty pane. If all 4 filled, show 4 (no empty target needed).
+    const visibleCount = filledCount < 4 ? filledCount + 1 : 4;
 
     grid.setAttribute('data-panes', visibleCount.toString());
 
-    // Show/hide individual panes: show filled ones + 1 empty drop target if room
+    // Show/hide individual panes: show filled ones + first empty one as drop target
+    let emptyShown = false;
     for (let i = 0; i < 4; i++) {
       const paneEl = document.getElementById(`term-pane-${i}`);
       if (!paneEl) continue;
@@ -2510,11 +2568,13 @@ class CWMApp {
       if (this.terminalPanes[i]) {
         // Filled pane — always show
         paneEl.hidden = false;
-      } else if (filledCount === 0 && i === 0) {
-        // No sessions at all — show first pane as drop target
+      } else if (!emptyShown) {
+        // First empty pane — show as drop target
         paneEl.hidden = false;
+        paneEl.classList.add('terminal-pane-empty');
+        emptyShown = true;
       } else {
-        // Empty pane — hide it
+        // Additional empty panes — hide
         paneEl.hidden = true;
       }
     }
@@ -2601,6 +2661,176 @@ class CWMApp {
     const start = path.substring(0, 15);
     const end = path.substring(path.length - (maxLen - 18));
     return `${start}...${end}`;
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     WORKSPACE DOCUMENTATION
+     ═══════════════════════════════════════════════════════════ */
+
+  async loadDocs() {
+    if (!this.state.activeWorkspace) {
+      this.state.docs = null;
+      this.renderDocs();
+      return;
+    }
+    try {
+      const data = await this.api('GET', `/api/workspaces/${this.state.activeWorkspace.id}/docs`);
+      this.state.docs = data;
+      this.renderDocs();
+    } catch (err) {
+      this.showToast('Failed to load documentation', 'error');
+    }
+  }
+
+  renderDocs() {
+    const docs = this.state.docs;
+    const ws = this.state.activeWorkspace;
+
+    // Update header
+    if (this.els.docsWorkspaceName) {
+      this.els.docsWorkspaceName.textContent = ws ? ws.name : 'No workspace selected';
+    }
+
+    if (!docs || docs.raw === null) {
+      // Empty state
+      if (this.els.docsNotesList) this.els.docsNotesList.innerHTML = '<div class="docs-empty">No notes yet. Click + to add one.</div>';
+      if (this.els.docsGoalsList) this.els.docsGoalsList.innerHTML = '<div class="docs-empty">No goals yet. Click + to add one.</div>';
+      if (this.els.docsTasksList) this.els.docsTasksList.innerHTML = '<div class="docs-empty">No tasks yet. Click + to add one.</div>';
+      if (this.els.docsNotesCount) this.els.docsNotesCount.textContent = '0';
+      if (this.els.docsGoalsCount) this.els.docsGoalsCount.textContent = '0';
+      if (this.els.docsTasksCount) this.els.docsTasksCount.textContent = '0';
+      if (this.els.docsRawEditor) this.els.docsRawEditor.value = '';
+      return;
+    }
+
+    // Counts
+    if (this.els.docsNotesCount) this.els.docsNotesCount.textContent = (docs.notes || []).length;
+    if (this.els.docsGoalsCount) this.els.docsGoalsCount.textContent = (docs.goals || []).length;
+    if (this.els.docsTasksCount) this.els.docsTasksCount.textContent = (docs.tasks || []).length;
+
+    // Notes
+    if (this.els.docsNotesList) {
+      this.els.docsNotesList.innerHTML = (docs.notes || []).length > 0
+        ? (docs.notes || []).map((n, i) => `
+          <div class="docs-item" data-index="${i}">
+            <span class="docs-note-time">${this.escapeHtml(n.timestamp || '')}</span>
+            <span class="docs-note-text">${this.escapeHtml(n.text)}</span>
+            <button class="docs-item-delete btn btn-ghost btn-icon btn-sm" data-section="notes" data-index="${i}" title="Remove">&times;</button>
+          </div>`).join('')
+        : '<div class="docs-empty">No notes yet. Click + to add one.</div>';
+    }
+
+    // Goals
+    if (this.els.docsGoalsList) {
+      this.els.docsGoalsList.innerHTML = (docs.goals || []).length > 0
+        ? (docs.goals || []).map((g, i) => `
+          <div class="docs-item${g.done ? ' docs-item-done' : ''}" data-index="${i}">
+            <label class="docs-checkbox">
+              <input type="checkbox" ${g.done ? 'checked' : ''} data-section="goals" data-index="${i}">
+            </label>
+            <span class="docs-item-text">${this.escapeHtml(g.text)}</span>
+            <button class="docs-item-delete btn btn-ghost btn-icon btn-sm" data-section="goals" data-index="${i}" title="Remove">&times;</button>
+          </div>`).join('')
+        : '<div class="docs-empty">No goals yet. Click + to add one.</div>';
+    }
+
+    // Tasks
+    if (this.els.docsTasksList) {
+      this.els.docsTasksList.innerHTML = (docs.tasks || []).length > 0
+        ? (docs.tasks || []).map((t, i) => `
+          <div class="docs-item${t.done ? ' docs-item-done' : ''}" data-index="${i}">
+            <label class="docs-checkbox">
+              <input type="checkbox" ${t.done ? 'checked' : ''} data-section="tasks" data-index="${i}">
+            </label>
+            <span class="docs-item-text">${this.escapeHtml(t.text)}</span>
+            <button class="docs-item-delete btn btn-ghost btn-icon btn-sm" data-section="tasks" data-index="${i}" title="Remove">&times;</button>
+          </div>`).join('')
+        : '<div class="docs-empty">No tasks yet. Click + to add one.</div>';
+    }
+
+    // Bind checkbox change events
+    if (this.els.docsPanel) {
+      this.els.docsPanel.querySelectorAll('.docs-checkbox input').forEach(cb => {
+        cb.addEventListener('change', () => this.toggleDocsItem(cb.dataset.section, parseInt(cb.dataset.index)));
+      });
+      // Bind delete buttons
+      this.els.docsPanel.querySelectorAll('.docs-item-delete').forEach(btn => {
+        btn.addEventListener('click', () => this.removeDocsItem(btn.dataset.section, parseInt(btn.dataset.index)));
+      });
+    }
+
+    // Raw editor
+    if (this.els.docsRawEditor) {
+      this.els.docsRawEditor.value = docs.raw || '';
+    }
+  }
+
+  async addDocsItem(section) {
+    if (!this.state.activeWorkspace) {
+      this.showToast('Select a workspace first', 'warning');
+      return;
+    }
+    const labels = { notes: 'Note', goals: 'Goal', tasks: 'Task' };
+    const label = labels[section] || 'Item';
+
+    const result = await this.showPromptModal({
+      title: `Add ${label}`,
+      fields: [
+        { key: 'text', label, placeholder: `Enter ${label.toLowerCase()}...`, required: true },
+      ],
+      confirmText: 'Add',
+      confirmClass: 'btn-primary',
+    });
+    if (!result || !result.text) return;
+
+    try {
+      await this.api('POST', `/api/workspaces/${this.state.activeWorkspace.id}/docs/${section}`, { text: result.text });
+      this.showToast(`${label} added`, 'success');
+      await this.loadDocs();
+    } catch (err) {
+      this.showToast(err.message || `Failed to add ${label}`, 'error');
+    }
+  }
+
+  async toggleDocsItem(section, index) {
+    if (!this.state.activeWorkspace) return;
+    try {
+      await this.api('PUT', `/api/workspaces/${this.state.activeWorkspace.id}/docs/${section}/${index}`);
+      await this.loadDocs();
+    } catch (err) {
+      this.showToast(err.message || 'Failed to update item', 'error');
+    }
+  }
+
+  async removeDocsItem(section, index) {
+    if (!this.state.activeWorkspace) return;
+    try {
+      await this.api('DELETE', `/api/workspaces/${this.state.activeWorkspace.id}/docs/${section}/${index}`);
+      await this.loadDocs();
+    } catch (err) {
+      this.showToast(err.message || 'Failed to remove item', 'error');
+    }
+  }
+
+  toggleDocsRawMode() {
+    this.state.docsRawMode = !this.state.docsRawMode;
+    if (this.els.docsStructured) this.els.docsStructured.hidden = this.state.docsRawMode;
+    if (this.els.docsRaw) this.els.docsRaw.hidden = !this.state.docsRawMode;
+    if (this.els.docsToggleRaw) this.els.docsToggleRaw.classList.toggle('active', this.state.docsRawMode);
+    if (this.els.docsSaveBtn) this.els.docsSaveBtn.hidden = !this.state.docsRawMode;
+  }
+
+  async saveDocsRaw() {
+    if (!this.state.activeWorkspace) return;
+    const raw = this.els.docsRawEditor ? this.els.docsRawEditor.value : '';
+    try {
+      await this.api('PUT', `/api/workspaces/${this.state.activeWorkspace.id}/docs`, { content: raw });
+      this.showToast('Documentation saved', 'success');
+      await this.loadDocs();
+    } catch (err) {
+      this.showToast(err.message || 'Failed to save documentation', 'error');
+    }
   }
 }
 

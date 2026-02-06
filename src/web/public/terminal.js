@@ -198,8 +198,12 @@ class TerminalPane {
       this.connected = false;
       this._log('WebSocket CLOSED code=' + event.code + ' reason=' + (event.reason || 'none'));
 
+      // Code 1011 = server error (PTY spawn failed). Don't retry — it won't fix itself.
       if (event.code === 1011) {
-        this._status('[Server error: PTY session failed to spawn]', 'red');
+        const reason = event.reason || 'PTY session failed to spawn';
+        this._status('[Server error: ' + reason + ']', 'red');
+        this._status('Check server logs for details. Drag a new session to retry.', 'yellow');
+        return; // No reconnect
       }
 
       if (this._reconnectAttempts < this._maxReconnectAttempts) {
