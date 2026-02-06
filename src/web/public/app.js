@@ -223,6 +223,14 @@ class CWMApp {
       if (e.key === 'Escape') this.hideContextMenu();
     });
 
+    // Suppress browser's native right-click menu within the app
+    this.els.app.addEventListener('contextmenu', (e) => {
+      // Allow native menu on text inputs/textareas for copy/paste
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+    });
+
     // Quick Switcher
     this.els.openSwitcherBtn.addEventListener('click', () => this.openQuickSwitcher());
     this.els.qsInput.addEventListener('input', () => this.onQuickSwitcherInput());
@@ -917,6 +925,120 @@ class CWMApp {
 
   hideContextMenu() {
     this.els.contextMenu.hidden = true;
+  }
+
+  showProjectSessionContextMenu(sessionName, projectPath, x, y) {
+    const items = [];
+
+    // Open in terminal (resume the Claude session)
+    items.push({
+      label: 'Open in Terminal', icon: '&#9654;', action: () => {
+        const emptySlot = this.terminalPanes.findIndex(p => p === null);
+        if (emptySlot === -1) {
+          this.showToast('All terminal panes full. Close one first.', 'warning');
+          return;
+        }
+        if (!this.state.activeWorkspace) {
+          this.showToast('Select or create a workspace first', 'warning');
+          return;
+        }
+        this.setViewMode('terminal');
+        // Create session in active workspace and open terminal
+        this.api('POST', '/api/sessions', {
+          name: sessionName,
+          workspaceId: this.state.activeWorkspace.id,
+          workingDir: projectPath,
+          topic: 'Resumed session',
+          command: 'claude',
+          resumeSessionId: sessionName,
+        }).then(async (data) => {
+          await this.loadSessions();
+          await this.loadStats();
+          if (data && data.session) {
+            this.openTerminalInPane(emptySlot, data.session.id, sessionName);
+          }
+        }).catch(err => {
+          this.showToast(err.message || 'Failed to create session', 'error');
+        });
+      },
+    });
+
+    // Add to active workspace (without opening terminal)
+    items.push({
+      label: 'Add to Workspace', icon: '&#43;', action: () => {
+        if (!this.state.activeWorkspace) {
+          this.showToast('Select or create a workspace first', 'warning');
+          return;
+        }
+        this.api('POST', '/api/sessions', {
+          name: sessionName,
+          workspaceId: this.state.activeWorkspace.id,
+          workingDir: projectPath,
+          topic: 'Resumed session',
+          command: 'claude',
+          resumeSessionId: sessionName,
+        }).then(async () => {
+          await this.loadSessions();
+          await this.loadStats();
+          this.renderWorkspaces();
+          this.showToast(`Session added to ${this.state.activeWorkspace.name}`, 'success');
+        }).catch(err => {
+          this.showToast(err.message || 'Failed to add session', 'error');
+        });
+      },
+    });
+
+    items.push({ type: 'sep' });
+
+    // Copy session ID
+    items.push({
+      label: 'Copy Session ID', icon: '&#128203;', action: () => {
+        navigator.clipboard.writeText(sessionName);
+        this.showToast('Session ID copied', 'success');
+      },
+    });
+
+    // Copy project path
+    items.push({
+      label: 'Copy Path', icon: '&#128193;', action: () => {
+        navigator.clipboard.writeText(projectPath);
+        this.showToast('Path copied', 'success');
+      },
+    });
+
+    // Render the menu
+    const container = this.els.contextMenuItems;
+    container.innerHTML = items.map(item => {
+      if (item.type === 'sep') return '<div class="context-menu-sep"></div>';
+      const cls = ['context-menu-item'];
+      if (item.danger) cls.push('ctx-danger');
+      const disabledAttr = item.disabled ? ' disabled' : '';
+      return `<button class="${cls.join(' ')}"${disabledAttr} data-action="${item.label}">
+        <span class="ctx-icon">${item.icon}</span>${item.label}
+      </button>`;
+    }).join('');
+
+    // Bind click handlers
+    container.querySelectorAll('.context-menu-item:not([disabled])').forEach((btn, i) => {
+      const actionItems = items.filter(it => !it.type);
+      const item = actionItems[i];
+      if (item && item.action) {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.hideContextMenu();
+          item.action();
+        });
+      }
+    });
+
+    // Position the menu, clamping to viewport
+    const menu = this.els.contextMenu;
+    menu.hidden = false;
+    const rect = menu.getBoundingClientRect();
+    const mx = Math.min(x, window.innerWidth - rect.width - 8);
+    const my = Math.min(y, window.innerHeight - rect.height - 8);
+    menu.style.left = Math.max(4, mx) + 'px';
+    menu.style.top = Math.max(4, my) + 'px';
   }
 
   async toggleBypass(sessionId) {
@@ -2351,7 +2473,7 @@ class CWMApp {
       header.addEventListener('dragend', () => header.classList.remove('dragging'));
     });
 
-    // Bind drag on individual session items inside projects
+    // Bind drag + context menu on individual session items inside projects
     list.querySelectorAll('.project-session-item').forEach(el => {
       el.addEventListener('dragstart', (e) => {
         e.stopPropagation(); // don't trigger parent project drag
@@ -2364,6 +2486,13 @@ class CWMApp {
         el.classList.add('dragging');
       });
       el.addEventListener('dragend', () => el.classList.remove('dragging'));
+
+      // Right-click context menu on project sessions
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.showProjectSessionContextMenu(el.dataset.sessionName, el.dataset.projectPath, e.clientX, e.clientY);
+      });
     });
   }
 
@@ -2498,9 +2627,15 @@ class CWMApp {
         };
 
         pane.addEventListener('dragover', (e) => {
-          if (hasType(e.dataTransfer.types, 'cwm/session') || hasType(e.dataTransfer.types, 'cwm/project') || hasType(e.dataTransfer.types, 'cwm/project-session') || hasType(e.dataTransfer.types, 'cwm/workspace')) {
+          const isSession = hasType(e.dataTransfer.types, 'cwm/session');
+          const isProject = hasType(e.dataTransfer.types, 'cwm/project');
+          const isProjectSession = hasType(e.dataTransfer.types, 'cwm/project-session');
+          const isWorkspace = hasType(e.dataTransfer.types, 'cwm/workspace');
+          if (isSession || isProject || isProjectSession || isWorkspace) {
             e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
+            // Match the effectAllowed set by the drag source:
+            // sessions use 'move', projects/project-sessions use 'copy', workspaces use 'move'
+            e.dataTransfer.dropEffect = (isProject || isProjectSession) ? 'copy' : 'move';
             pane.classList.add('drag-over');
           }
         });

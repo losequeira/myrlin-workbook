@@ -106,7 +106,7 @@ class Store extends EventEmitter {
   _debouncedSave() {
     this._dirty = true;
     if (this._saveTimer) clearTimeout(this._saveTimer);
-    this._saveTimer = setTimeout(() => this.save(), 500);
+    this._saveTimer = setTimeout(() => this.save(), 150);
   }
 
   // ─── Getters ─────────────────────────────────────────────
@@ -162,7 +162,7 @@ class Store extends EventEmitter {
     if (!this._state.activeWorkspace) {
       this._state.activeWorkspace = id;
     }
-    this._debouncedSave();
+    this.save(); // Immediate save — workspace creation is critical
     this.emit('workspace:created', workspace);
     return workspace;
   }
@@ -190,7 +190,7 @@ class Store extends EventEmitter {
     }
     // Clean up workspace documentation file
     docsManager.deleteDocs(id);
-    this._debouncedSave();
+    this.save(); // Immediate save — workspace deletion is critical
     this.emit('workspace:deleted', { id });
     return true;
   }
@@ -198,7 +198,7 @@ class Store extends EventEmitter {
   setActiveWorkspace(id) {
     if (!this._state.workspaces[id]) return false;
     this._state.activeWorkspace = id;
-    this._debouncedSave();
+    this.save(); // Immediate save — active workspace is critical
     this.emit('workspace:activated', this._state.workspaces[id]);
     return true;
   }
@@ -226,7 +226,7 @@ class Store extends EventEmitter {
     this._state.sessions[id] = session;
     this._state.workspaces[workspaceId].sessions.push(id);
     this._state.workspaces[workspaceId].lastActive = now;
-    this._debouncedSave();
+    this.save(); // Immediate save — session creation is critical
     this.emit('session:created', session);
     return session;
   }
@@ -235,7 +235,12 @@ class Store extends EventEmitter {
     const session = this._state.sessions[id];
     if (!session) return null;
     Object.assign(session, updates, { lastActive: new Date().toISOString() });
-    this._debouncedSave();
+    // Status changes save immediately, other updates debounce
+    if (updates.status || updates.pid !== undefined) {
+      this.save();
+    } else {
+      this._debouncedSave();
+    }
     this.emit('session:updated', session);
     return session;
   }
@@ -249,7 +254,7 @@ class Store extends EventEmitter {
       ws.sessions = ws.sessions.filter(sid => sid !== id);
     }
     delete this._state.sessions[id];
-    this._debouncedSave();
+    this.save(); // Immediate save — deletion is critical
     this.emit('session:deleted', { id });
     return true;
   }
@@ -540,6 +545,20 @@ let instance = null;
 function getStore() {
   if (!instance) {
     instance = new Store().init();
+
+    // Flush pending saves on process exit to prevent data loss
+    const flushOnExit = () => {
+      if (instance && instance._dirty) {
+        try { instance.save(); } catch (_) {}
+      }
+    };
+    process.on('exit', flushOnExit);
+    process.on('SIGINT', () => { flushOnExit(); process.exit(0); });
+    process.on('SIGTERM', () => { flushOnExit(); process.exit(0); });
+    process.on('uncaughtException', (err) => {
+      console.error('[Store] Uncaught exception, flushing state:', err.message);
+      flushOnExit();
+    });
   }
   return instance;
 }
