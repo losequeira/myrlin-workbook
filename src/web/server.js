@@ -818,6 +818,145 @@ app.post('/api/sessions/:id/auto-title', requireAuth, (req, res) => {
   }
 });
 
+/**
+ * POST /api/sessions/:id/summarize
+ * Reads the Claude session's .jsonl file and generates a summary
+ * of the overall theme and most recent tasking.
+ * Also works for project sessions by passing claudeSessionId in body.
+ */
+app.post('/api/sessions/:id/summarize', requireAuth, (req, res) => {
+  // For store sessions, use resumeSessionId. For project sessions, accept direct ID.
+  const session = store.getSession(req.params.id);
+  const claudeSessionId = (session && session.resumeSessionId) || req.body.claudeSessionId || req.params.id;
+
+  if (!claudeSessionId) {
+    return res.status(400).json({ error: 'No Claude session ID available' });
+  }
+
+  // Find the .jsonl file in ~/.claude/projects/
+  const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+  let jsonlPath = null;
+
+  try {
+    if (fs.existsSync(claudeProjectsDir)) {
+      const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory());
+      for (const dir of projectDirs) {
+        const candidate = path.join(claudeProjectsDir, dir.name, claudeSessionId + '.jsonl');
+        if (fs.existsSync(candidate)) {
+          jsonlPath = candidate;
+          break;
+        }
+      }
+    }
+  } catch (_) {}
+
+  if (!jsonlPath) {
+    return res.status(404).json({ error: 'Session conversation file not found' });
+  }
+
+  try {
+    const stat = fs.statSync(jsonlPath);
+    const fileSize = stat.size;
+
+    // Read last 100KB to get recent messages, and first 50KB for overall context
+    const headBuf = Buffer.alloc(Math.min(50 * 1024, fileSize));
+    const fd = fs.openSync(jsonlPath, 'r');
+    fs.readSync(fd, headBuf, 0, headBuf.length, 0);
+
+    const tailSize = Math.min(100 * 1024, fileSize);
+    const tailBuf = Buffer.alloc(tailSize);
+    fs.readSync(fd, tailBuf, 0, tailSize, Math.max(0, fileSize - tailSize));
+    fs.closeSync(fd);
+
+    const headContent = headBuf.toString('utf-8');
+    const tailContent = tailBuf.toString('utf-8');
+
+    // Parse messages from head (for overall theme)
+    const headLines = headContent.split('\n').filter(l => l.trim());
+    const tailLines = tailContent.split('\n').filter(l => l.trim());
+
+    const extractMessages = (lines, limit) => {
+      const msgs = [];
+      for (const line of lines) {
+        if (msgs.length >= limit) break;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.role === 'user' || msg.type === 'human') {
+            let text = '';
+            if (typeof msg.content === 'string') text = msg.content;
+            else if (Array.isArray(msg.content)) {
+              const tb = msg.content.find(b => b.type === 'text');
+              if (tb) text = tb.text;
+            }
+            if (text) msgs.push({ role: 'user', text: text.substring(0, 500) });
+          } else if (msg.role === 'assistant') {
+            let text = '';
+            if (typeof msg.content === 'string') text = msg.content;
+            else if (Array.isArray(msg.content)) {
+              const tb = msg.content.find(b => b.type === 'text');
+              if (tb) text = tb.text;
+            }
+            if (text) msgs.push({ role: 'assistant', text: text.substring(0, 500) });
+          }
+        } catch (_) {}
+      }
+      return msgs;
+    };
+
+    const earlyMessages = extractMessages(headLines, 5);
+    const recentMessages = extractMessages(tailLines.slice(-20), 10);
+
+    // Build summary
+    let overallTheme = 'Unable to determine theme';
+    let recentTasking = 'No recent activity found';
+    const sessionName = session ? session.name : claudeSessionId;
+
+    // Overall theme from first user message
+    const firstUser = earlyMessages.find(m => m.role === 'user');
+    if (firstUser) {
+      overallTheme = firstUser.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (overallTheme.length > 200) {
+        overallTheme = overallTheme.substring(0, 200).replace(/\s+\S*$/, '') + '...';
+      }
+    }
+
+    // Recent tasking from last user messages
+    const recentUserMsgs = recentMessages.filter(m => m.role === 'user');
+    if (recentUserMsgs.length > 0) {
+      const last = recentUserMsgs[recentUserMsgs.length - 1];
+      recentTasking = last.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (recentTasking.length > 300) {
+        recentTasking = recentTasking.substring(0, 300).replace(/\s+\S*$/, '') + '...';
+      }
+    }
+
+    // Recent assistant summary
+    let recentAssistant = '';
+    const recentAssistantMsgs = recentMessages.filter(m => m.role === 'assistant');
+    if (recentAssistantMsgs.length > 0) {
+      const last = recentAssistantMsgs[recentAssistantMsgs.length - 1];
+      recentAssistant = last.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (recentAssistant.length > 300) {
+        recentAssistant = recentAssistant.substring(0, 300).replace(/\s+\S*$/, '') + '...';
+      }
+    }
+
+    return res.json({
+      sessionName,
+      claudeSessionId,
+      overallTheme,
+      recentTasking,
+      recentAssistant,
+      messageCount: headLines.length + tailLines.length,
+      fileSize,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to read session: ' + err.message });
+  }
+});
+
+
 // ──────────────────────────────────────────────────────────
 //  SSE - Server-Sent Events for live updates
 // ──────────────────────────────────────────────────────────

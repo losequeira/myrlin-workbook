@@ -205,6 +205,9 @@ class CWMApp {
       this.initSidebarResize();
     }
 
+    // Vertical resize between workspaces & projects sections
+    this.initSidebarSectionResize();
+
     // Workspace
     this.els.createWorkspaceBtn.addEventListener('click', () => this.createWorkspace());
 
@@ -339,6 +342,32 @@ class CWMApp {
     if ('ontouchstart' in window) {
       this.initTouchGestures();
     }
+
+    // ─── Mobile: Terminal Toolbar ──────────────────────────────
+    document.querySelectorAll('.terminal-mobile-toolbar button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.key;
+        // Find the active terminal pane
+        const activePane = this.terminalPanes.find(tp => tp !== null);
+        if (!activePane || !activePane.ws || activePane.ws.readyState !== WebSocket.OPEN) return;
+
+        const keyMap = {
+          'enter': '\r',
+          'tab': '\t',
+          'ctrlc': '\x03',
+          'ctrld': '\x04',
+          'escape': '\x1b',
+          'up': '\x1b[A',
+          'down': '\x1b[B',
+        };
+        const data = keyMap[key];
+        if (data) {
+          activePane.ws.send(JSON.stringify({ type: 'input', data }));
+          // Refocus terminal
+          if (activePane.term) activePane.term.focus();
+        }
+      });
+    });
   }
 
   async init() {
@@ -950,6 +979,7 @@ class CWMApp {
     items.push(
       { label: 'Rename', icon: '&#9998;', action: () => this.renameSession(sessionId) },
       { label: 'Auto Title', icon: '&#9733;', action: () => this.autoTitleSession(sessionId) },
+      { label: 'Summarize', icon: '&#128220;', action: () => this.summarizeSession(sessionId) },
       { label: 'Copy Session ID', icon: '&#128203;', action: () => {
         navigator.clipboard.writeText(session.resumeSessionId || session.id);
         this.showToast('Session ID copied', 'success');
@@ -982,8 +1012,7 @@ class CWMApp {
           return;
         }
         this.setViewMode('terminal');
-        const tempId = 'pty-' + sessionName;
-        this.openTerminalInPane(emptySlot, tempId, sessionName, {
+        this.openTerminalInPane(emptySlot, sessionName, sessionName, {
           cwd: projectPath,
           resumeSessionId: sessionName,
           command: 'claude',
@@ -1018,6 +1047,13 @@ class CWMApp {
           this.showToast(err.message || 'Failed to add session', 'error');
         });
       },
+    });
+
+    items.push({ type: 'sep' });
+
+    // Summarize session
+    items.push({
+      label: 'Summarize', icon: '&#128220;', action: () => this.summarizeSession(sessionName, sessionName),
     });
 
     items.push({ type: 'sep' });
@@ -1095,6 +1131,87 @@ class CWMApp {
       }
     } catch (err) {
       this.showToast(err.message || 'Failed to auto-title', 'error');
+    }
+  }
+
+  /**
+   * Show a summary modal for a session with overall theme, recent tasking,
+   * and option to add to a workspace.
+   * Works for both store sessions (by ID) and project sessions (by Claude UUID).
+   */
+  async summarizeSession(sessionId, claudeSessionId) {
+    try {
+      this.showToast('Loading summary...', 'info');
+      const body = claudeSessionId ? { claudeSessionId } : {};
+      const data = await this.api('POST', `/api/sessions/${sessionId}/summarize`, body);
+
+      // Build workspace options for "Send to Workspace"
+      const wsOptions = this.state.workspaces.map(ws =>
+        `<option value="${ws.id}">${this.escapeHtml(ws.name)}</option>`
+      ).join('');
+
+      const html = `
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;color:var(--overlay0);font-weight:600;margin-bottom:6px;">Overall Theme</div>
+            <div style="font-size:13px;color:var(--text-primary);line-height:1.5;background:var(--surface0);padding:10px 12px;border-radius:8px;">${this.escapeHtml(data.overallTheme)}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;color:var(--overlay0);font-weight:600;margin-bottom:6px;">Most Recent Tasking</div>
+            <div style="font-size:13px;color:var(--text-primary);line-height:1.5;background:var(--surface0);padding:10px 12px;border-radius:8px;">${this.escapeHtml(data.recentTasking)}</div>
+          </div>
+          ${data.recentAssistant ? `<div>
+            <div style="font-size:11px;text-transform:uppercase;color:var(--overlay0);font-weight:600;margin-bottom:6px;">Last Assistant Response</div>
+            <div style="font-size:13px;color:var(--text-secondary);line-height:1.5;background:var(--surface0);padding:10px 12px;border-radius:8px;max-height:120px;overflow-y:auto;">${this.escapeHtml(data.recentAssistant)}</div>
+          </div>` : ''}
+          <div style="font-size:11px;color:var(--overlay0);">File size: ${this.formatSize(data.fileSize)}</div>
+          ${this.state.workspaces.length > 0 ? `<div style="border-top:1px solid var(--border-subtle);padding-top:12px;">
+            <div style="font-size:11px;text-transform:uppercase;color:var(--overlay0);font-weight:600;margin-bottom:8px;">Send to Workspace</div>
+            <div style="display:flex;gap:8px;">
+              <select id="summary-ws-select" style="flex:1;padding:8px;border-radius:6px;background:var(--surface0);color:var(--text-primary);border:1px solid var(--surface1);font-size:13px;">
+                ${wsOptions}
+              </select>
+              <button class="btn btn-primary btn-sm" id="summary-send-btn" style="white-space:nowrap;">Add to Workspace</button>
+            </div>
+          </div>` : ''}
+        </div>
+      `;
+
+      // Show modal
+      this.els.modalTitle.textContent = data.sessionName || 'Session Summary';
+      this.els.modalBody.innerHTML = html;
+      this.els.modalFooter.hidden = true;
+      this.els.modalOverlay.hidden = false;
+
+      // Bind "Send to Workspace" button
+      const sendBtn = document.getElementById('summary-send-btn');
+      if (sendBtn) {
+        sendBtn.addEventListener('click', async () => {
+          const wsId = document.getElementById('summary-ws-select').value;
+          if (!wsId) return;
+          const ws = this.state.workspaces.find(w => w.id === wsId);
+          const cId = data.claudeSessionId || claudeSessionId || sessionId;
+          try {
+            await this.api('POST', '/api/sessions', {
+              name: data.sessionName || cId.substring(0, 12),
+              workspaceId: wsId,
+              workingDir: '',
+              topic: (data.overallTheme || '').substring(0, 100),
+              command: 'claude',
+              resumeSessionId: cId,
+            });
+            await this.loadSessions();
+            await this.loadStats();
+            this.renderWorkspaces();
+            this.closeModal(null);
+            this.showToast(`Added to ${ws ? ws.name : 'workspace'}`, 'success');
+          } catch (err) {
+            this.showToast(err.message || 'Failed to add session', 'error');
+          }
+        });
+      }
+    } catch (err) {
+      this.showToast(err.message || 'Failed to summarize session', 'error');
     }
   }
 
@@ -1461,6 +1578,75 @@ class CWMApp {
       document.addEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseup', onMouseUp);
     });
+  }
+
+  initSidebarSectionResize() {
+    const handle = document.getElementById('sidebar-section-resize');
+    if (!handle) return;
+
+    const wsList = this.els.workspaceList;
+    const projList = this.els.projectsList;
+    if (!wsList || !projList) return;
+
+    let isResizing = false;
+    let startY = 0;
+    let startWsHeight = 0;
+
+    const onMove = (clientY) => {
+      if (!isResizing) return;
+      const dy = clientY - startY;
+      const sidebar = this.els.sidebar;
+      const sidebarRect = sidebar.getBoundingClientRect();
+      const totalAvailable = sidebarRect.height - 200; // Reserve space for headers/footer
+      const newWsHeight = Math.max(80, Math.min(totalAvailable, startWsHeight + dy));
+      wsList.style.flex = 'none';
+      wsList.style.height = newWsHeight + 'px';
+      projList.style.flex = '1';
+    };
+
+    const onEnd = () => {
+      if (!isResizing) return;
+      isResizing = false;
+      handle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Save to localStorage
+      const height = parseInt(wsList.style.height, 10);
+      if (height) localStorage.setItem('cwm_wsSectionHeight', height.toString());
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', onTouchEnd);
+    };
+
+    const onMouseMove = (e) => onMove(e.clientY);
+    const onMouseUp = () => onEnd();
+    const onTouchMove = (e) => { e.preventDefault(); onMove(e.touches[0].clientY); };
+    const onTouchEnd = () => onEnd();
+
+    const startResize = (clientY) => {
+      isResizing = true;
+      startY = clientY;
+      startWsHeight = wsList.getBoundingClientRect().height;
+      handle.classList.add('active');
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      document.addEventListener('touchmove', onTouchMove, { passive: false });
+      document.addEventListener('touchend', onTouchEnd);
+    };
+
+    handle.addEventListener('mousedown', (e) => { e.preventDefault(); startResize(e.clientY); });
+    handle.addEventListener('touchstart', (e) => { e.preventDefault(); startResize(e.touches[0].clientY); }, { passive: false });
+
+    // Restore saved height
+    const saved = localStorage.getItem('cwm_wsSectionHeight');
+    if (saved) {
+      wsList.style.flex = 'none';
+      wsList.style.height = saved + 'px';
+      projList.style.flex = '1';
+    }
   }
 
 
@@ -2707,10 +2893,10 @@ class CWMApp {
             try {
               const ps = JSON.parse(projSessJson);
               const claudeSessionId = ps.sessionName; // This IS the Claude session UUID
-              // Open terminal directly — pass spawn options via WebSocket URL
-              // Use a temporary ID for the terminal pane (prefixed to avoid store collisions)
-              const tempId = 'pty-' + claudeSessionId;
-              this.openTerminalInPane(slotIdx, tempId, claudeSessionId, {
+              console.log('[DnD] Project-session drop — resumeSessionId:', claudeSessionId, 'cwd:', ps.projectPath);
+              // Open terminal directly — use the Claude session UUID as the PTY session ID
+              // so the PTY manager can reuse it on subsequent drops
+              this.openTerminalInPane(slotIdx, claudeSessionId, claudeSessionId, {
                 cwd: ps.projectPath,
                 resumeSessionId: claudeSessionId,
                 command: 'claude',
@@ -2859,13 +3045,11 @@ class CWMApp {
     if (!grid) return;
 
     const filledCount = this.terminalPanes.filter(p => p !== null).length;
-    // Show filled panes + 1 empty drop target (so users can always add more).
-    // If none filled, show 1 empty pane. If all 4 filled, show 4 (no empty target needed).
-    const visibleCount = filledCount < 4 ? filledCount + 1 : 4;
+    // Only show empty drop target when no terminals are open
+    const visibleCount = filledCount > 0 ? filledCount : 1;
 
     grid.setAttribute('data-panes', visibleCount.toString());
 
-    // Show/hide individual panes: show filled ones + first empty one as drop target
     let emptyShown = false;
     for (let i = 0; i < 4; i++) {
       const paneEl = document.getElementById(`term-pane-${i}`);
@@ -2874,13 +3058,13 @@ class CWMApp {
       if (this.terminalPanes[i]) {
         // Filled pane — always show
         paneEl.hidden = false;
-      } else if (!emptyShown) {
-        // First empty pane — show as drop target
+      } else if (!emptyShown && filledCount === 0) {
+        // Only show one empty pane as drop target when no terminals exist
         paneEl.hidden = false;
         paneEl.classList.add('terminal-pane-empty');
         emptyShown = true;
       } else {
-        // Additional empty panes — hide
+        // Hide all other empty panes
         paneEl.hidden = true;
       }
     }
@@ -2937,12 +3121,14 @@ class CWMApp {
 
     // Show
     this.els.actionSheetOverlay.hidden = false;
+    document.body.classList.add('sheet-open');
   }
 
   hideActionSheet() {
     if (this.els.actionSheetOverlay) {
       this.els.actionSheetOverlay.hidden = true;
     }
+    document.body.classList.remove('sheet-open');
   }
 
   /**

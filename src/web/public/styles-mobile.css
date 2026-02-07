@@ -74,6 +74,41 @@
   .sidebar {
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
+
+  /* Smooth momentum scrolling on iOS */
+  .sidebar-list,
+  .session-list,
+  .docs-structured,
+  .logs-container,
+  .action-sheet {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* Prevent body scroll when overlay is open */
+  body.sheet-open {
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+  }
+
+  /* Main content needs to be scrollable */
+  .main-content {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Header compact on mobile */
+  .app-header {
+    padding: 8px 12px;
+    height: 50px;
+  }
+
+  /* Sidebar should scroll internally */
+  .sidebar {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 /* Bottom-sheet modals on small phones */
@@ -462,6 +497,63 @@
 }
 
 
+/* ─── Mobile Terminal Toolbar ───────────────────────────── */
+
+.terminal-mobile-toolbar {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .terminal-mobile-toolbar {
+    display: flex;
+    gap: 4px;
+    padding: 6px 8px;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    background: var(--mantle);
+    border-top: 1px solid var(--surface0);
+    flex-shrink: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .terminal-mobile-toolbar button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 38px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: var(--surface0);
+    border: 1px solid var(--surface1);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+    cursor: pointer;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .terminal-mobile-toolbar button:active {
+    background: var(--surface1);
+    color: var(--text-primary);
+  }
+
+  .terminal-mobile-toolbar .toolbar-send {
+    background: var(--green);
+    color: var(--crust);
+    border-color: var(--green);
+    font-weight: 600;
+    font-family: inherit;
+    min-width: 56px;
+  }
+
+  .terminal-mobile-toolbar .toolbar-send:active {
+    opacity: 0.8;
+  }
+}
+
+
 /* ─── Phase 5: Touch Gestures ──────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -576,5 +668,73 @@
   .project-accordion-header {
     min-height: 44px;
     padding: 10px 12px;
+  }
+
+  /* Sidebar on mobile: full width overlay */
+  .sidebar.open {
+    width: 85vw !important;
+    max-width: 350px;
+  }
+
+  /* Hide sidebar resize handle on mobile */
+  .sidebar-resize-handle {
+    display: none !important;
+  }
+
+  /* Session list should fill available space */
+  .session-list-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .session-list {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Panel header compact */
+  .panel-header {
+    padding: 12px 16px;
+    flex-shrink: 0;
+  }
+
+  /* Detail panel scrollable */
+  .session-detail-panel {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Detail section padding */
+  .detail-section {
+    padding: 12px 16px;
+  }
+
+  /* Better touch for detail buttons */
+  .detail-actions .btn {
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+
+  /* Docs panel scrollable */
+  .docs-panel {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Login form mobile */
+  .login-card {
+    margin: 16px;
+    max-width: calc(100vw - 32px);
+  }
+
+  .login-card input {
+    padding: 14px 12px;
+  }
+
+  .login-card .btn {
+    min-height: 48px;
+    font-size: 15px;
   }
 }

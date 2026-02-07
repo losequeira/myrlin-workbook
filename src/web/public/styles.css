@@ -2054,6 +2054,23 @@ textarea.input {
 
 .sidebar-divider { height: 1px; background: var(--border-subtle); margin: 8px 16px; }
 
+/* Vertical resize handle between Workspaces and Projects */
+.sidebar-section-resize {
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  margin: 0 8px;
+  border-radius: 3px;
+  transition: background var(--transition-fast);
+}
+
+.sidebar-section-resize:hover,
+.sidebar-section-resize.active {
+  background: var(--mauve);
+}
+
 /* Project accordion */
 .project-accordion { margin: 0 4px; }
 .project-accordion.missing { opacity: 0.4; }
@@ -2404,6 +2421,26 @@ textarea.input {
 .terminal-pane-empty.drag-over .terminal-container {
   border-color: var(--mauve); color: var(--mauve);
   background: rgba(203, 166, 247, 0.05);
+}
+
+/* Terminal pane resize handles */
+.terminal-pane-resize-h {
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--transition-fast);
+  z-index: 5;
+}
+.terminal-pane-resize-v {
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  transition: background var(--transition-fast);
+  z-index: 5;
+}
+.terminal-pane-resize-h:hover, .terminal-pane-resize-h.active,
+.terminal-pane-resize-v:hover, .terminal-pane-resize-v.active {
+  background: var(--mauve);
 }
 
 /* Terminal view tab active color */
