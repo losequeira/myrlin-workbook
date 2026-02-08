@@ -101,6 +101,8 @@ class TerminalPane {
         } catch (e) {
           this._log('fit() failed: ' + e.message);
         }
+        // Initialize mobile scroll/type mode separation
+        this.initMobileInputMode();
         this._log('Calling connect()...');
         this.connect();
       });
@@ -249,6 +251,86 @@ class TerminalPane {
 
   blur() {
     if (this.term) this.term.blur();
+  }
+
+  /**
+   * Mobile scroll/type mode.
+   * On mobile, touching the terminal to scroll triggers the keyboard because
+   * xterm.js uses a hidden textarea for input. Professional mobile terminals
+   * (Blink Shell, Termux) solve this by separating scroll and type modes.
+   *
+   * Scroll mode (default): textarea is readonly, touch scrolls without keyboard
+   * Type mode: textarea is writable, keyboard appears for input
+   */
+  _isMobile() {
+    return 'ontouchstart' in window || window.innerWidth <= 768;
+  }
+
+  /**
+   * Initialize mobile input mode — called after terminal mounts.
+   * Sets the terminal to scroll mode by default on mobile.
+   */
+  initMobileInputMode() {
+    if (!this._isMobile() || !this.term) return;
+
+    this._mobileTypeMode = false;
+
+    // Find xterm's hidden textarea
+    const container = document.getElementById(this.containerId);
+    if (!container) return;
+    const textarea = container.querySelector('.xterm-helper-textarea');
+    if (!textarea) return;
+
+    this._xtermTextarea = textarea;
+
+    // Default to scroll mode: make textarea readonly so keyboard won't appear
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.setAttribute('inputmode', 'none');
+
+    // When textarea loses focus (keyboard dismissed), revert to scroll mode
+    textarea.addEventListener('blur', () => {
+      if (this._mobileTypeMode) {
+        this.setMobileScrollMode();
+      }
+    });
+  }
+
+  /**
+   * Switch to type mode — keyboard appears, user can type into terminal
+   */
+  setMobileTypeMode() {
+    if (!this._xtermTextarea || !this.term) return;
+    this._mobileTypeMode = true;
+    this._xtermTextarea.removeAttribute('readonly');
+    this._xtermTextarea.setAttribute('inputmode', 'text');
+    this.term.focus();
+    // Notify listeners (toolbar button can update its state)
+    if (this.onMobileModeChange) this.onMobileModeChange('type');
+  }
+
+  /**
+   * Switch to scroll mode — keyboard hidden, touch scrolls terminal output
+   */
+  setMobileScrollMode() {
+    if (!this._xtermTextarea) return;
+    this._mobileTypeMode = false;
+    this._xtermTextarea.setAttribute('readonly', 'readonly');
+    this._xtermTextarea.setAttribute('inputmode', 'none');
+    if (this.term) this.term.blur();
+    // Notify listeners
+    if (this.onMobileModeChange) this.onMobileModeChange('scroll');
+  }
+
+  /**
+   * Toggle between scroll and type mode
+   */
+  toggleMobileInputMode() {
+    if (this._mobileTypeMode) {
+      this.setMobileScrollMode();
+    } else {
+      this.setMobileTypeMode();
+    }
+    return this._mobileTypeMode;
   }
 
   dispose() {

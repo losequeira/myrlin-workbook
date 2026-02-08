@@ -615,6 +615,26 @@
     color: var(--text-primary);
   }
 
+  .terminal-mobile-toolbar .toolbar-keyboard {
+    background: var(--surface1);
+    color: var(--blue);
+    border-color: var(--surface2);
+    font-weight: 600;
+    font-family: inherit;
+    min-width: 72px;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+
+  .terminal-mobile-toolbar .toolbar-keyboard.toolbar-active {
+    background: var(--blue);
+    color: var(--crust);
+    border-color: var(--blue);
+  }
+
+  .terminal-mobile-toolbar .toolbar-keyboard:active {
+    opacity: 0.8;
+  }
+
   .terminal-mobile-toolbar .toolbar-send {
     background: var(--green);
     color: var(--crust);

@@ -505,7 +505,20 @@ class CWMApp {
         const activePane = this._activeTerminalSlot !== null
           ? this.terminalPanes[this._activeTerminalSlot]
           : this.terminalPanes.find(tp => tp !== null);
-        if (!activePane || !activePane.ws || activePane.ws.readyState !== WebSocket.OPEN) return;
+        if (!activePane) return;
+
+        // Keyboard toggle — switches between scroll mode and type mode
+        if (key === 'keyboard') {
+          const isTypeMode = activePane.toggleMobileInputMode();
+          // Update ALL keyboard buttons in all toolbars to reflect active pane state
+          document.querySelectorAll('.toolbar-keyboard').forEach(kb => {
+            kb.classList.toggle('toolbar-active', isTypeMode);
+            kb.textContent = isTypeMode ? '\u2328 Typing' : '\u2328 Type';
+          });
+          return;
+        }
+
+        if (!activePane.ws || activePane.ws.readyState !== WebSocket.OPEN) return;
 
         const keyMap = {
           'enter': '\r',
@@ -518,8 +531,16 @@ class CWMApp {
         };
         const data = keyMap[key];
         if (data) {
+          // If in scroll mode, auto-switch to type mode when sending keys
+          if (activePane._isMobile && activePane._isMobile() && !activePane._mobileTypeMode) {
+            activePane.setMobileTypeMode();
+            document.querySelectorAll('.toolbar-keyboard').forEach(kb => {
+              kb.classList.add('toolbar-active');
+              kb.textContent = '\u2328 Typing';
+            });
+          }
           activePane.ws.send(JSON.stringify({ type: 'input', data }));
-          // Refocus terminal
+          // Refocus terminal for continued typing
           if (activePane.term) activePane.term.focus();
         }
       });
@@ -1195,6 +1216,13 @@ class CWMApp {
     ];
 
     const items = [];
+
+    // View details (shows full session info in detail panel)
+    items.push({
+      label: 'View Details', icon: '&#128269;', action: () => {
+        this.selectSession(sessionId);
+      },
+    });
 
     // Open in terminal (quick action)
     items.push({
@@ -3499,6 +3527,15 @@ class CWMApp {
     // Create and mount TerminalPane
     const tp = new TerminalPane(containerId, sessionId, sessionName, spawnOpts);
     this.terminalPanes[slotIdx] = tp;
+
+    // Wire up mobile mode change callback to sync keyboard toggle button
+    tp.onMobileModeChange = (mode) => {
+      document.querySelectorAll('.toolbar-keyboard').forEach(kb => {
+        kb.classList.toggle('toolbar-active', mode === 'type');
+        kb.textContent = mode === 'type' ? '\u2328 Typing' : '\u2328 Type';
+      });
+    };
+
     tp.mount();
 
     this.updateTerminalGridLayout();
@@ -3983,6 +4020,15 @@ class CWMApp {
     if (tp && tp.fitAddon) {
       requestAnimationFrame(() => {
         try { tp.fitAddon.fit(); } catch (_) {}
+      });
+    }
+
+    // Reset keyboard toggle button to match new pane's input mode
+    if (tp && tp._isMobile && tp._isMobile()) {
+      const isTypeMode = !!tp._mobileTypeMode;
+      document.querySelectorAll('.toolbar-keyboard').forEach(kb => {
+        kb.classList.toggle('toolbar-active', isTypeMode);
+        kb.textContent = isTypeMode ? '\u2328 Typing' : '\u2328 Type';
       });
     }
   }

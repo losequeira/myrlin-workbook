@@ -2074,12 +2074,29 @@ textarea.input {
   position: fixed;
   z-index: 10000;
   min-width: 180px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   animation: ctx-in 0.12s ease-out;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface2) transparent;
+}
+
+.context-menu::-webkit-scrollbar {
+  width: 6px;
+}
+
+.context-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.context-menu::-webkit-scrollbar-thumb {
+  background: var(--surface2);
+  border-radius: 3px;
 }
 
 @keyframes ctx-in {

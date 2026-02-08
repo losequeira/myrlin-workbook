@@ -824,57 +824,81 @@ app.post('/api/sessions/:id/auto-title', requireAuth, (req, res) => {
   }
 
   try {
-    // Read first 50KB to find user messages (don't read huge files)
-    const fd = fs.openSync(jsonlPath, 'r');
-    const buf = Buffer.alloc(50 * 1024);
-    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    const content = buf.toString('utf-8', 0, bytesRead);
-    const lines = content.split('\n').filter(l => l.trim());
-
-    let title = '';
-
-    // Look for the first human/user message
-    // Claude JSONL format: { type: "user", message: { role: "user", content: "..." }, userType: "external" }
-    // Tool results also have type "user" but content is an array of tool_result objects — skip those
-    for (const line of lines) {
+    // Helper to extract text from a JSONL user message
+    function extractUserText(line) {
       try {
         const msg = JSON.parse(line);
-
-        // Nested format: { type: "user", message: { role: "user", content: ... } }
         const inner = msg.message || msg;
         const isUser = msg.type === 'user' || msg.type === 'human' || inner.role === 'user';
-        if (!isUser) continue;
-
-        // Extract text content from the inner message
-        const content = inner.content;
+        if (!isUser) return null;
+        const c = inner.content;
         let text = '';
-
-        if (typeof content === 'string') {
-          text = content;
-        } else if (Array.isArray(content)) {
-          // Content blocks: [{ type: 'text', text: '...' }] — skip tool_result blocks
-          const textBlock = content.find(b => b.type === 'text' && b.text);
+        if (typeof c === 'string') {
+          text = c;
+        } else if (Array.isArray(c)) {
+          const textBlock = c.find(b => b.type === 'text' && b.text);
           if (textBlock) text = textBlock.text;
         }
+        // Skip system-generated messages, tool results, very short messages
+        if (!text || text.length < 5) return null;
+        // Skip messages that look like tool results or system prompts
+        if (text.startsWith('<') && text.includes('system-reminder')) return null;
+        return text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+      } catch (_) { return null; }
+    }
 
-        if (text) {
-          // Clean and truncate to make a title
-          title = text
-            .replace(/[\r\n]+/g, ' ')  // collapse newlines
-            .replace(/\s+/g, ' ')       // collapse whitespace
-            .trim();
-          // Truncate to ~60 chars at word boundary
-          if (title.length > 60) {
-            title = title.substring(0, 60).replace(/\s+\S*$/, '') + '...';
-          }
-          break;
-        }
-      } catch (_) { /* skip malformed lines */ }
+    const stat = fs.statSync(jsonlPath);
+    const fileSize = stat.size;
+    let title = '';
+
+    // Strategy: Read the TAIL of the file to get recent activity.
+    // Use the last ~30KB for recent messages, which better reflects current work.
+    const tailSize = Math.min(30 * 1024, fileSize);
+    const tailOffset = Math.max(0, fileSize - tailSize);
+    const tailBuf = Buffer.alloc(tailSize);
+    const fd = fs.openSync(jsonlPath, 'r');
+    const tailBytesRead = fs.readSync(fd, tailBuf, 0, tailSize, tailOffset);
+
+    // Also read first 10KB to get the initial user message as fallback
+    const headSize = Math.min(10 * 1024, fileSize);
+    const headBuf = Buffer.alloc(headSize);
+    const headBytesRead = fs.readSync(fd, headBuf, 0, headSize, 0);
+    fs.closeSync(fd);
+
+    // Extract recent user messages from tail
+    const tailContent = tailBuf.toString('utf-8', 0, tailBytesRead);
+    const tailLines = tailContent.split('\n').filter(l => l.trim());
+    // Skip the first line of tail — it's likely a partial line from offset
+    if (tailOffset > 0 && tailLines.length > 0) tailLines.shift();
+
+    const recentUserMessages = [];
+    for (let i = tailLines.length - 1; i >= 0 && recentUserMessages.length < 3; i--) {
+      const text = extractUserText(tailLines[i]);
+      if (text) recentUserMessages.unshift(text);
+    }
+
+    if (recentUserMessages.length > 0) {
+      // Use the most recent substantial user message as the title
+      // Pick the last one (most recent) — it best represents current work
+      const recentText = recentUserMessages[recentUserMessages.length - 1];
+      title = recentText;
+    } else {
+      // Fallback: use first user message from head
+      const headContent = headBuf.toString('utf-8', 0, headBytesRead);
+      const headLines = headContent.split('\n').filter(l => l.trim());
+      for (const line of headLines) {
+        const text = extractUserText(line);
+        if (text) { title = text; break; }
+      }
     }
 
     if (!title) {
       return res.status(404).json({ error: 'No user message found in session' });
+    }
+
+    // Clean and truncate to make a title (~60 chars at word boundary)
+    if (title.length > 60) {
+      title = title.substring(0, 60).replace(/\s+\S*$/, '') + '...';
     }
 
     // Update the session name if it's a store session
