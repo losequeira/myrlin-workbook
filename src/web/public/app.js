@@ -195,6 +195,7 @@ class CWMApp {
       statTotal: document.getElementById('stat-total'),
       openSwitcherBtn: document.getElementById('open-switcher-btn'),
       logoutBtn: document.getElementById('logout-btn'),
+      themeToggleBtn: document.getElementById('theme-toggle-btn'),
 
       // Sessions
       sessionPanelTitle: document.getElementById('session-panel-title'),
@@ -318,6 +319,11 @@ class CWMApp {
     // Logout & Restart All
     this.els.logoutBtn.addEventListener('click', () => this.logout());
     document.getElementById('restart-all-btn').addEventListener('click', () => this.restartAllSessions());
+
+    // Theme toggle
+    if (this.els.themeToggleBtn) {
+      this.els.themeToggleBtn.addEventListener('click', () => this.toggleTheme());
+    }
 
     // Sidebar toggle (mobile)
     this.els.sidebarToggle.addEventListener('click', () => this.toggleSidebar());
@@ -501,12 +507,17 @@ class CWMApp {
 
     // ─── Mobile: VisualViewport resize (soft keyboard) ───────
     // When the mobile keyboard opens/closes, the visual viewport shrinks/grows.
-    // Refit terminal panes so they fill the available space without cutoff.
+    // Adjust layout height + refit terminal panes.
     if (window.visualViewport) {
       let vpResizeTimer = null;
       window.visualViewport.addEventListener('resize', () => {
         clearTimeout(vpResizeTimer);
         vpResizeTimer = setTimeout(() => {
+          // Set --vh CSS variable to actual visible height (keyboard-aware)
+          const vh = window.visualViewport.height;
+          document.documentElement.style.setProperty('--vh', vh + 'px');
+
+          // Refit terminal panes
           if (this.state.viewMode === 'terminal') {
             this.terminalPanes.forEach(tp => {
               if (tp && tp.fitAddon) {
@@ -515,6 +526,15 @@ class CWMApp {
             });
           }
         }, 150);
+      });
+
+      // Also listen to scroll events on visualViewport (iOS Safari)
+      window.visualViewport.addEventListener('scroll', () => {
+        // Reset scroll position — we don't want the viewport to scroll,
+        // we want content to resize above the keyboard
+        if (window.visualViewport.offsetTop > 0) {
+          window.scrollTo(0, 0);
+        }
       });
     }
 
@@ -1660,6 +1680,28 @@ class CWMApp {
     }
   }
 
+  /* ═══════════════════════════════════════════════════════════
+     THEME TOGGLE
+     ═══════════════════════════════════════════════════════════ */
+
+  toggleTheme() {
+    const isLatte = document.documentElement.dataset.theme === 'latte';
+    if (isLatte) {
+      delete document.documentElement.dataset.theme;
+      localStorage.setItem('cwm_theme', 'mocha');
+    } else {
+      document.documentElement.dataset.theme = 'latte';
+      localStorage.setItem('cwm_theme', 'latte');
+    }
+
+    // Update all open xterm.js terminal themes
+    this.terminalPanes.forEach(tp => {
+      if (tp && tp.term) {
+        tp.term.options.theme = TerminalPane.getCurrentTheme();
+      }
+    });
+  }
+
   /**
    * Show a summary modal for a session with overall theme, recent tasking,
    * and option to add to a workspace.
@@ -2168,6 +2210,7 @@ class CWMApp {
       wsList.style.flex = 'none';
       wsList.style.height = newWsHeight + 'px';
       projList.style.flex = '1';
+      projList.style.minHeight = '0';
     };
 
     const onEnd = () => {
@@ -2212,6 +2255,7 @@ class CWMApp {
       wsList.style.flex = 'none';
       wsList.style.height = saved + 'px';
       projList.style.flex = '1';
+      projList.style.minHeight = '0';
     }
   }
 
@@ -4077,6 +4121,24 @@ class CWMApp {
         }, { passive: true });
         pane.addEventListener('touchend', () => clearTimeout(termLongPress));
         pane.addEventListener('touchmove', () => clearTimeout(termLongPress));
+
+      // Double-click on pane title for inline rename
+      const paneTitleEl = pane.querySelector('.terminal-pane-title');
+      if (paneTitleEl) {
+        paneTitleEl.addEventListener('dblclick', (e) => {
+          e.stopPropagation();
+          const tp = this.terminalPanes[slotIdx];
+          if (!tp) return; // Empty pane — no rename
+
+          const sessionId = tp.sessionId;
+          const allSessions = [
+            ...(this.state.sessions || []),
+            ...(this.state.allSessions || []),
+          ];
+          const storeSession = allSessions.find(s => s.id === sessionId);
+          this.startTerminalPaneRename(paneTitleEl, slotIdx, sessionId, !!storeSession);
+        });
+      }
       });
     }
   }
@@ -5017,6 +5079,70 @@ class CWMApp {
           nameEl.textContent = newName;
           nameEl.classList.add('rename-flash');
           setTimeout(() => nameEl.classList.remove('rename-flash'), 600);
+        } catch (err) {
+          nameEl.textContent = currentName;
+          this.showToast('Rename failed: ' + (err.message || ''), 'error');
+        }
+      } else {
+        nameEl.textContent = currentName;
+      }
+    };
+
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.value = currentName; input.blur(); }
+    });
+  }
+
+  /**
+   * Inline rename for terminal pane headers.
+   * Same UX pattern as startInlineRename but also updates the
+   * TerminalPane instance and syncs globally.
+   */
+  startTerminalPaneRename(nameEl, slotIdx, sessionId, isStoreSession) {
+    const currentName = nameEl.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'inline-rename-input';
+    input.value = currentName;
+    nameEl.textContent = '';
+    nameEl.appendChild(input);
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const newName = input.value.trim();
+      if (newName && newName !== currentName) {
+        try {
+          if (isStoreSession) {
+            await this.api('PUT', `/api/sessions/${sessionId}`, { name: newName });
+            // Update local state
+            const s = this.state.sessions && this.state.sessions.find(s => s.id === sessionId);
+            if (s) s.name = newName;
+            const as = this.state.allSessions && this.state.allSessions.find(s => s.id === sessionId);
+            if (as && as !== s) as.name = newName;
+            // Sync globally via Claude UUID
+            const claudeId = (s && s.resumeSessionId) || (as && as.resumeSessionId);
+            if (claudeId) this.syncSessionTitle(claudeId, newName);
+          } else {
+            // Project session — sessionId IS the Claude UUID
+            this.syncSessionTitle(sessionId, newName);
+          }
+
+          // Update TerminalPane instance
+          const tp = this.terminalPanes[slotIdx];
+          if (tp) tp.sessionName = newName;
+
+          nameEl.textContent = newName;
+          nameEl.classList.add('rename-flash');
+          setTimeout(() => nameEl.classList.remove('rename-flash'), 600);
+
+          // Refresh sidebar
+          this.renderWorkspaces();
         } catch (err) {
           nameEl.textContent = currentName;
           this.showToast('Rename failed: ' + (err.message || ''), 'error');

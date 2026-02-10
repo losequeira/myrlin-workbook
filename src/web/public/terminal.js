@@ -3,6 +3,63 @@
  * Performance-critical: raw binary I/O, no JSON wrapping for terminal data
  */
 class TerminalPane {
+  // ── Theme palettes for xterm.js ──────────────────────────
+  static THEME_MOCHA = {
+    background: '#1e1e2e',
+    foreground: '#cdd6f4',
+    cursor: '#f5e0dc',
+    cursorAccent: '#1e1e2e',
+    selectionBackground: 'rgba(203, 166, 247, 0.25)',
+    selectionForeground: '#cdd6f4',
+    black: '#45475a',
+    red: '#f38ba8',
+    green: '#a6e3a1',
+    yellow: '#f9e2af',
+    blue: '#89b4fa',
+    magenta: '#cba6f7',
+    cyan: '#94e2d5',
+    white: '#bac2de',
+    brightBlack: '#585b70',
+    brightRed: '#f38ba8',
+    brightGreen: '#a6e3a1',
+    brightYellow: '#f9e2af',
+    brightBlue: '#89b4fa',
+    brightMagenta: '#cba6f7',
+    brightCyan: '#94e2d5',
+    brightWhite: '#a6adc8',
+  };
+
+  static THEME_LATTE = {
+    background: '#eff1f5',
+    foreground: '#4c4f69',
+    cursor: '#dc8a78',
+    cursorAccent: '#eff1f5',
+    selectionBackground: 'rgba(136, 57, 239, 0.2)',
+    selectionForeground: '#4c4f69',
+    black: '#5c5f77',
+    red: '#d20f39',
+    green: '#40a02b',
+    yellow: '#df8e1d',
+    blue: '#1e66f5',
+    magenta: '#8839ef',
+    cyan: '#179299',
+    white: '#acb0be',
+    brightBlack: '#6c6f85',
+    brightRed: '#d20f39',
+    brightGreen: '#40a02b',
+    brightYellow: '#df8e1d',
+    brightBlue: '#1e66f5',
+    brightMagenta: '#8839ef',
+    brightCyan: '#179299',
+    brightWhite: '#bcc0cc',
+  };
+
+  static getCurrentTheme() {
+    return document.documentElement.dataset.theme === 'latte'
+      ? TerminalPane.THEME_LATTE
+      : TerminalPane.THEME_MOCHA;
+  }
+
   constructor(containerId, sessionId, sessionName, spawnOpts) {
     this.containerId = containerId;
     this.sessionId = sessionId;
@@ -57,30 +114,7 @@ class TerminalPane {
         lineHeight: 1.2,
         scrollback: 5000,
         rightClickSelectsWord: false,
-        theme: {
-          background: '#1e1e2e',
-          foreground: '#cdd6f4',
-          cursor: '#f5e0dc',
-          cursorAccent: '#1e1e2e',
-          selectionBackground: 'rgba(203, 166, 247, 0.25)',
-          selectionForeground: '#cdd6f4',
-          black: '#45475a',
-          red: '#f38ba8',
-          green: '#a6e3a1',
-          yellow: '#f9e2af',
-          blue: '#89b4fa',
-          magenta: '#cba6f7',
-          cyan: '#94e2d5',
-          white: '#bac2de',
-          brightBlack: '#585b70',
-          brightRed: '#f38ba8',
-          brightGreen: '#a6e3a1',
-          brightYellow: '#f9e2af',
-          brightBlue: '#89b4fa',
-          brightMagenta: '#cba6f7',
-          brightCyan: '#94e2d5',
-          brightWhite: '#a6adc8',
-        },
+        theme: TerminalPane.getCurrentTheme(),
       });
 
       this.fitAddon = new FitAddon.FitAddon();
@@ -177,6 +211,9 @@ class TerminalPane {
         }, 100);
       });
       this._resizeObserver.observe(container);
+
+      // ── Click-to-position cursor ──────────────────────────
+      this._initClickToPosition(container);
     } catch (err) {
       console.error('[Terminal] Init failed:', err);
       container.innerHTML = '<div style="padding:16px;color:#f38ba8;font-size:13px;">Terminal init failed: ' + err.message + '</div>';
@@ -292,15 +329,16 @@ class TerminalPane {
   }
 
   focus() {
-    if (this.term) {
-      this.term.focus();
-      // Also explicitly focus the hidden textarea — xterm.js's focus()
-      // sometimes doesn't propagate in multi-instance setups
-      const container = document.getElementById(this.containerId);
-      if (container) {
-        const textarea = container.querySelector('.xterm-helper-textarea');
-        if (textarea) textarea.focus({ preventScroll: true });
-      }
+    if (!this.term) return;
+    // On mobile in scroll mode, don't focus textarea (prevents keyboard popup)
+    if (this._isMobile() && !this._mobileTypeMode) return;
+    this.term.focus();
+    // Also explicitly focus the hidden textarea — xterm.js's focus()
+    // sometimes doesn't propagate in multi-instance setups
+    const container = document.getElementById(this.containerId);
+    if (container) {
+      const textarea = container.querySelector('.xterm-helper-textarea');
+      if (textarea) textarea.focus({ preventScroll: true });
     }
   }
 
@@ -473,6 +511,58 @@ class TerminalPane {
     }, { passive: true });
 
     this._touchScrollCleanup = () => cancelMomentum();
+  }
+
+  /**
+   * Click-to-position: when user clicks on the same row as the cursor,
+   * send left/right arrow keys to move cursor to clicked column.
+   * Desktop only — mobile has its own touch scroll handling.
+   */
+  _initClickToPosition(container) {
+    if (this._isMobile()) return;
+
+    container.addEventListener('mouseup', (e) => {
+      // Don't interfere with text selection
+      if (this.term.hasSelection()) return;
+      // Left-click only
+      if (e.button !== 0) return;
+
+      // Small delay to let selection state settle
+      setTimeout(() => {
+        if (this.term.hasSelection()) return;
+        this._handleClickToPosition(e, container);
+      }, 50);
+    });
+  }
+
+  _handleClickToPosition(e, container) {
+    if (!this.term || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    const cursorRow = this.term.buffer.active.cursorY;
+    const cursorCol = this.term.buffer.active.cursorX;
+
+    // Calculate cell dimensions from actual rendered size
+    const termEl = container.querySelector('.xterm-screen');
+    if (!termEl) return;
+    const rect = termEl.getBoundingClientRect();
+    const cellW = rect.width / this.term.cols;
+    const cellH = rect.height / this.term.rows;
+
+    // Determine clicked row/col
+    const clickedRow = Math.floor((e.clientY - rect.top) / cellH);
+    const clickedCol = Math.floor((e.clientX - rect.left) / cellW);
+
+    // Safety: only move cursor on the SAME ROW as cursor
+    if (clickedRow !== cursorRow) return;
+
+    // Clamp and calculate delta
+    const targetCol = Math.max(0, Math.min(clickedCol, this.term.cols - 1));
+    const delta = targetCol - cursorCol;
+    if (delta === 0) return;
+
+    // Send arrow key escape sequences
+    const seq = (delta > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(delta));
+    this.ws.send(JSON.stringify({ type: 'input', data: seq }));
   }
 
   /**

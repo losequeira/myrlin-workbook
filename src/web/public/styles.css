@@ -1858,7 +1858,13 @@ textarea.input {
     margin: 8px auto 0;
   }
 
-  #projects-list { max-height: 200px; overflow-y: auto; }
+  .app-layout {
+    height: var(--vh, 100vh);
+    height: var(--vh, 100dvh);
+  }
+
+  #workspace-list { min-height: 0; overflow-y: auto; }
+  #projects-list { min-height: 0; max-height: 200px; overflow-y: auto; }
 
   .sidebar-resize-handle { display: none; }
   .sidebar-collapse-bar { display: none; }
@@ -2774,6 +2780,9 @@ textarea.input {
   flex-shrink: 0;
 }
 .terminal-pane-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.terminal-pane:not(.terminal-pane-empty) .terminal-pane-title {
+  cursor: text;
+}
 .terminal-pane-close { width: 20px; height: 20px; padding: 0; }
 .terminal-container { flex: 1; overflow: hidden; }
 .terminal-pane-empty .terminal-container {
@@ -3507,4 +3516,68 @@ textarea.input {
   font-size: 11px !important;
   padding: 2px 6px !important;
   margin-left: 4px;
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* CATPPUCCIN LATTE (Light Theme)                              */
+/* ═══════════════════════════════════════════════════════════ */
+
+:root[data-theme="latte"] {
+  /* Catppuccin Latte palette */
+  --base: #eff1f5;
+  --mantle: #e6e9ef;
+  --crust: #dce0e8;
+  --surface0: #ccd0da;
+  --surface1: #bcc0cc;
+  --surface2: #acb0be;
+  --overlay0: #9ca0b0;
+  --overlay1: #8c8fa1;
+  --text: #4c4f69;
+  --subtext0: #6c6f85;
+  --subtext1: #5c5f77;
+  --mauve: #8839ef;
+  --blue: #1e66f5;
+  --green: #40a02b;
+  --yellow: #df8e1d;
+  --red: #d20f39;
+  --peach: #fe640b;
+  --teal: #179299;
+  --sky: #04a5e5;
+  --pink: #ea76cb;
+  --lavender: #7287fd;
+  --flamingo: #dd7878;
+  --rosewater: #dc8a78;
+  --sapphire: #209fb5;
+
+  /* Semantic overrides */
+  --border-subtle: rgba(172, 176, 190, 0.5);
+
+  /* Shadows — lighter for light theme */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.1), 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 16px 50px rgba(0, 0, 0, 0.12), 0 8px 20px rgba(0, 0, 0, 0.1);
+}
+
+/* Theme toggle icon visibility */
+:root[data-theme="latte"] .theme-icon-moon { display: none; }
+:root[data-theme="latte"] .theme-icon-sun { display: block !important; }
+
+/* Latte-specific overrides for hardcoded rgba values in Mocha */
+:root[data-theme="latte"] ::selection {
+  background: rgba(136, 57, 239, 0.2);
+  color: var(--text);
+}
+
+:root[data-theme="latte"] .stat-dot-running {
+  background: var(--green);
+  box-shadow: 0 0 4px rgba(64, 160, 43, 0.5);
+}
+
+:root[data-theme="latte"] .terminal-pane-empty.drag-over .terminal-container {
+  background: rgba(136, 57, 239, 0.05);
+}
+
+:root[data-theme="latte"] .terminal-resize-handle:hover {
+  background: rgba(136, 57, 239, 0.4);
 }
