@@ -230,7 +230,7 @@ app.get('/api/workspaces/:id/docs', requireAuth, (req, res) => {
 
   const docs = store.getWorkspaceDocs(req.params.id);
   if (!docs) {
-    return res.json({ raw: null, notes: [], goals: [], tasks: [] });
+    return res.json({ raw: null, notes: [], goals: [], tasks: [], roadmap: [] });
   }
   return res.json(docs);
 });
@@ -306,8 +306,26 @@ app.post('/api/workspaces/:id/docs/tasks', requireAuth, (req, res) => {
 });
 
 /**
+ * POST /api/workspaces/:id/docs/roadmap
+ * Body: { text, status? }
+ * Adds a roadmap item with optional status (defaults to 'planned').
+ */
+app.post('/api/workspaces/:id/docs/roadmap', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { text, status } = req.body || {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required.' });
+  }
+  store.addWorkspaceRoadmapItem(req.params.id, text.trim(), status || 'planned');
+  return res.status(201).json({ success: true });
+});
+
+/**
  * PUT /api/workspaces/:id/docs/:section/:index
- * Toggle done state of a goal or task.
+ * Toggle done state of a goal or task, or cycle roadmap status.
  */
 app.put('/api/workspaces/:id/docs/:section/:index', requireAuth, (req, res) => {
   const store = getStore();
@@ -315,12 +333,17 @@ app.put('/api/workspaces/:id/docs/:section/:index', requireAuth, (req, res) => {
   if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
 
   const { section, index } = req.params;
-  if (!['goals', 'tasks'].includes(section)) {
-    return res.status(400).json({ error: 'Section must be "goals" or "tasks".' });
+  if (!['goals', 'tasks', 'roadmap'].includes(section)) {
+    return res.status(400).json({ error: 'Section must be "goals", "tasks", or "roadmap".' });
   }
   const idx = parseInt(index, 10);
   if (isNaN(idx) || idx < 0) {
     return res.status(400).json({ error: 'Invalid index.' });
+  }
+  if (section === 'roadmap') {
+    const result = store.cycleWorkspaceRoadmapStatus(req.params.id, idx);
+    if (!result) return res.status(404).json({ error: 'Item not found at index.' });
+    return res.json({ success: true });
   }
   const result = store.toggleWorkspaceItem(req.params.id, section, idx);
   if (!result) return res.status(404).json({ error: 'Item not found at index.' });
@@ -337,8 +360,8 @@ app.delete('/api/workspaces/:id/docs/:section/:index', requireAuth, (req, res) =
   if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
 
   const { section, index } = req.params;
-  if (!['notes', 'goals', 'tasks'].includes(section)) {
-    return res.status(400).json({ error: 'Section must be "notes", "goals", or "tasks".' });
+  if (!['notes', 'goals', 'tasks', 'roadmap'].includes(section)) {
+    return res.status(400).json({ error: 'Section must be "notes", "goals", "tasks", or "roadmap".' });
   }
   const idx = parseInt(index, 10);
   if (isNaN(idx) || idx < 0) {

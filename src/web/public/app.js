@@ -283,6 +283,8 @@ class CWMApp {
       docsNotesCount: document.getElementById('docs-notes-count'),
       docsGoalsCount: document.getElementById('docs-goals-count'),
       docsTasksCount: document.getElementById('docs-tasks-count'),
+      docsRoadmapList: document.getElementById('docs-roadmap-list'),
+      docsRoadmapCount: document.getElementById('docs-roadmap-count'),
       docsAiInsights: document.getElementById('docs-ai-insights'),
       docsAiRefresh: document.getElementById('docs-ai-refresh'),
 
@@ -4905,9 +4907,11 @@ class CWMApp {
       if (this.els.docsNotesList) this.els.docsNotesList.innerHTML = '<div class="docs-empty">No notes yet. Click + to add one.</div>';
       if (this.els.docsGoalsList) this.els.docsGoalsList.innerHTML = '<div class="docs-empty">No goals yet. Click + to add one.</div>';
       if (this.els.docsTasksList) this.els.docsTasksList.innerHTML = '<div class="docs-empty">No tasks yet. Click + to add one.</div>';
+      if (this.els.docsRoadmapList) this.els.docsRoadmapList.innerHTML = '<div class="docs-empty">No milestones yet. Click + to add one.</div>';
       if (this.els.docsNotesCount) this.els.docsNotesCount.textContent = '0';
       if (this.els.docsGoalsCount) this.els.docsGoalsCount.textContent = '0';
       if (this.els.docsTasksCount) this.els.docsTasksCount.textContent = '0';
+      if (this.els.docsRoadmapCount) this.els.docsRoadmapCount.textContent = '0';
       if (this.els.docsRawEditor) this.els.docsRawEditor.value = '';
       return;
     }
@@ -4916,6 +4920,7 @@ class CWMApp {
     if (this.els.docsNotesCount) this.els.docsNotesCount.textContent = (docs.notes || []).length;
     if (this.els.docsGoalsCount) this.els.docsGoalsCount.textContent = (docs.goals || []).length;
     if (this.els.docsTasksCount) this.els.docsTasksCount.textContent = (docs.tasks || []).length;
+    if (this.els.docsRoadmapCount) this.els.docsRoadmapCount.textContent = (docs.roadmap || []).length;
 
     // Notes
     if (this.els.docsNotesList) {
@@ -4957,6 +4962,23 @@ class CWMApp {
         : '<div class="docs-empty">No tasks yet. Click + to add one.</div>';
     }
 
+    // Roadmap
+    if (this.els.docsRoadmapList) {
+      const statusLabel = { planned: 'Planned', active: 'Active', done: 'Done' };
+      const statusClass = { planned: 'roadmap-planned', active: 'roadmap-active', done: 'roadmap-done' };
+      this.els.docsRoadmapList.innerHTML = (docs.roadmap || []).length > 0
+        ? (docs.roadmap || []).map((r, i) => `
+          <div class="docs-item docs-roadmap-item ${statusClass[r.status] || 'roadmap-planned'}" data-index="${i}">
+            <button class="roadmap-status-dot" data-section="roadmap" data-index="${i}" title="Click to cycle: Planned > Active > Done">
+              <span class="roadmap-dot"></span>
+            </button>
+            <span class="docs-item-text">${this.escapeHtml(r.text)}</span>
+            <span class="roadmap-status-label">${statusLabel[r.status] || 'Planned'}</span>
+            <button class="docs-item-delete btn btn-ghost btn-icon btn-sm" data-section="roadmap" data-index="${i}" title="Remove">&times;</button>
+          </div>`).join('')
+        : '<div class="docs-empty">No milestones yet. Click + to add one.</div>';
+    }
+
     // Bind checkbox change events
     if (this.els.docsPanel) {
       this.els.docsPanel.querySelectorAll('.docs-checkbox input').forEach(cb => {
@@ -4965,6 +4987,11 @@ class CWMApp {
       // Bind delete buttons
       this.els.docsPanel.querySelectorAll('.docs-item-delete').forEach(btn => {
         btn.addEventListener('click', () => this.removeDocsItem(btn.dataset.section, parseInt(btn.dataset.index)));
+      });
+
+      // Bind roadmap status dot clicks (cycle planned > active > done)
+      this.els.docsPanel.querySelectorAll('.roadmap-status-dot').forEach(dot => {
+        dot.addEventListener('click', () => this.toggleDocsItem(dot.dataset.section, parseInt(dot.dataset.index)));
       });
 
       // Click note text to edit in large editor

@@ -588,7 +588,7 @@ class Store extends EventEmitter {
   /**
    * Remove an item from workspace documentation.
    * @param {string} workspaceId
-   * @param {string} section - 'notes', 'goals', or 'tasks'
+   * @param {string} section - 'notes', 'goals', 'tasks', or 'roadmap'
    * @param {number} index
    */
   removeWorkspaceItem(workspaceId, section, index) {
@@ -596,6 +596,33 @@ class Store extends EventEmitter {
     if (!ws) return false;
     const result = docsManager.removeItem(workspaceId, ws.name, section, index);
     if (result) this.emit('docs:updated', { workspaceId, section });
+    return result;
+  }
+
+  /**
+   * Add a roadmap item to workspace documentation.
+   * @param {string} workspaceId
+   * @param {string} text
+   * @param {string} [status='planned'] - 'planned' | 'active' | 'done'
+   */
+  addWorkspaceRoadmapItem(workspaceId, text, status = 'planned') {
+    const ws = this._state.workspaces[workspaceId];
+    if (!ws) return;
+    docsManager.appendRoadmapItem(workspaceId, ws.name, text, status);
+    this.emit('docs:updated', { workspaceId, section: 'roadmap' });
+  }
+
+  /**
+   * Cycle a roadmap item's status: planned -> active -> done -> planned.
+   * @param {string} workspaceId
+   * @param {number} index
+   * @returns {boolean} success
+   */
+  cycleWorkspaceRoadmapStatus(workspaceId, index) {
+    const ws = this._state.workspaces[workspaceId];
+    if (!ws) return false;
+    const result = docsManager.cycleRoadmapStatus(workspaceId, ws.name, index);
+    if (result) this.emit('docs:updated', { workspaceId, section: 'roadmap' });
     return result;
   }
 
