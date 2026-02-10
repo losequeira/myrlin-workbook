@@ -127,6 +127,12 @@ class CWMApp {
     this.qsHighlightIndex = -1;
     this.qsResults = [];
 
+    // ─── Global Search state ─────────────────────────────────
+    this._searchDebounceTimer = null;
+
+    // ─── Conflict Detection state ────────────────────────────
+    this._conflictCheckInterval = null;
+
     // ─── SSE ───────────────────────────────────────────────────
     this.eventSource = null;
     this.sseRetryTimeout = null;
@@ -238,6 +244,11 @@ class CWMApp {
       qsOverlay: document.getElementById('quick-switcher-overlay'),
       qsInput: document.getElementById('qs-input'),
       qsResultsContainer: document.getElementById('qs-results'),
+
+      // Global Search
+      searchOverlay: document.getElementById('search-overlay'),
+      searchInput: document.getElementById('search-input'),
+      searchResults: document.getElementById('search-results'),
 
       // Modal
       modalOverlay: document.getElementById('modal-overlay'),
@@ -505,9 +516,16 @@ class CWMApp {
         e.preventDefault();
         if (this.state.token) this.openQuickSwitcher();
       }
+      // Ctrl+Shift+F / Cmd+Shift+F — Global Search
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'f') {
+        e.preventDefault();
+        if (this.state.token) this.openGlobalSearch();
+      }
       // Escape
       if (e.key === 'Escape') {
-        if (this.els.actionSheetOverlay && !this.els.actionSheetOverlay.hidden) {
+        if (this.els.searchOverlay && !this.els.searchOverlay.hidden) {
+          this.closeGlobalSearch();
+        } else if (this.els.actionSheetOverlay && !this.els.actionSheetOverlay.hidden) {
           this.hideActionSheet();
         } else if (!this.els.qsOverlay.hidden) {
           this.closeQuickSwitcher();
@@ -653,6 +671,7 @@ class CWMApp {
         this.initAIInsights();
         await this.loadAll();
         this.connectSSE();
+        this.startConflictChecks();
       } else {
         this.state.token = null;
         localStorage.removeItem('cwm_token');
@@ -737,6 +756,7 @@ class CWMApp {
         this.initAIInsights();
         await this.loadAll();
         this.connectSSE();
+        this.startConflictChecks();
       } else {
         this.els.loginError.textContent = 'Invalid password. Please try again.';
       }
@@ -6575,6 +6595,193 @@ class CWMApp {
       }
     } catch (err) {
       this.showToast(err.message || 'Failed to create worktree', 'error');
+    }
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     GLOBAL SEARCH (Ctrl+Shift+F / Cmd+Shift+F)
+     ═══════════════════════════════════════════════════════════ */
+
+  openGlobalSearch() {
+    if (!this.els.searchOverlay) return;
+    this.els.searchOverlay.hidden = false;
+    this.els.searchInput.value = '';
+    this.els.searchResults.innerHTML = '<div class="qs-empty">Type to search across all session history</div>';
+    // Small delay so animation plays before focus
+    requestAnimationFrame(() => this.els.searchInput.focus());
+
+    // Bind input handler (debounced)
+    if (this._searchInputHandler) {
+      this.els.searchInput.removeEventListener('input', this._searchInputHandler);
+    }
+    this._searchInputHandler = () => {
+      clearTimeout(this._searchDebounceTimer);
+      const query = this.els.searchInput.value.trim();
+      if (query.length < 2) {
+        this.els.searchResults.innerHTML = '<div class="qs-empty">Enter at least 2 characters to search</div>';
+        return;
+      }
+      this.els.searchResults.innerHTML = '<div class="qs-empty">Searching...</div>';
+      this._searchDebounceTimer = setTimeout(() => {
+        this.performGlobalSearch(query);
+      }, 300);
+    };
+    this.els.searchInput.addEventListener('input', this._searchInputHandler);
+
+    // Bind keydown handler for Enter and Escape
+    if (this._searchKeyHandler) {
+      this.els.searchInput.removeEventListener('keydown', this._searchKeyHandler);
+    }
+    this._searchKeyHandler = (e) => {
+      if (e.key === 'Enter') {
+        clearTimeout(this._searchDebounceTimer);
+        const query = this.els.searchInput.value.trim();
+        if (query.length >= 2) {
+          this.els.searchResults.innerHTML = '<div class="qs-empty">Searching...</div>';
+          this.performGlobalSearch(query);
+        }
+      } else if (e.key === 'Escape') {
+        this.closeGlobalSearch();
+      }
+    };
+    this.els.searchInput.addEventListener('keydown', this._searchKeyHandler);
+
+    // Click overlay background to close
+    if (this._searchOverlayClickHandler) {
+      this.els.searchOverlay.removeEventListener('click', this._searchOverlayClickHandler);
+    }
+    this._searchOverlayClickHandler = (e) => {
+      if (e.target === this.els.searchOverlay) {
+        this.closeGlobalSearch();
+      }
+    };
+    this.els.searchOverlay.addEventListener('click', this._searchOverlayClickHandler);
+  }
+
+  closeGlobalSearch() {
+    if (!this.els.searchOverlay) return;
+    this.els.searchOverlay.hidden = true;
+    this.els.searchInput.value = '';
+    clearTimeout(this._searchDebounceTimer);
+  }
+
+  async performGlobalSearch(query) {
+    try {
+      const data = await this.api('GET', `/api/search?q=${encodeURIComponent(query)}&limit=30`);
+      const results = data.results || [];
+
+      if (results.length === 0) {
+        this.els.searchResults.innerHTML = '<div class="qs-empty">No results found</div>';
+        return;
+      }
+
+      const html = results.map(r => {
+        const projectName = this.escapeHtml(r.projectName || r.project || 'Unknown');
+        const timeStr = r.timestamp ? this.relativeTime(r.timestamp) : (r.modified ? this.relativeTime(r.modified) : '');
+        const snippet = this.highlightSearchQuery(this.escapeHtml(r.snippet || r.preview || ''), query);
+        const sessionId = this.escapeHtml(r.sessionId || '');
+        const role = this.escapeHtml(r.role || r.type || '');
+
+        return `
+          <div class="search-result" data-session-id="${sessionId}" data-project-path="${this.escapeHtml(r.projectPath || '')}">
+            <div class="search-result-header">
+              <span class="search-result-project">${projectName}</span>
+              <span class="search-result-time">${timeStr}</span>
+            </div>
+            <div class="search-result-snippet">${snippet}</div>
+            <div class="search-result-meta">${sessionId}${role ? ' &middot; ' + role : ''}</div>
+          </div>`;
+      }).join('');
+
+      this.els.searchResults.innerHTML = html;
+
+      // Bind click events on results to navigate to the session
+      this.els.searchResults.querySelectorAll('.search-result').forEach(el => {
+        el.addEventListener('click', () => {
+          const sessionId = el.dataset.sessionId;
+          const projectPath = el.dataset.projectPath;
+          if (sessionId) {
+            this.openConversationResult(sessionId, projectPath);
+            this.closeGlobalSearch();
+          }
+        });
+      });
+    } catch (err) {
+      this.els.searchResults.innerHTML = `<div class="qs-empty" style="color: var(--red);">Search failed: ${this.escapeHtml(err.message || 'Unknown error')}</div>`;
+    }
+  }
+
+  /**
+   * Highlight matching portions of text with <mark> tags.
+   * The text should already be HTML-escaped before calling this method.
+   */
+  highlightSearchQuery(escapedText, query) {
+    if (!query || !escapedText) return escapedText;
+    // Escape regex special characters in the query
+    const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Escape the query for HTML (in case it contains & < > etc.) to match against escaped text
+    const escapedQuery = this.escapeHtml(query);
+    const safeEscapedQuery = escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try {
+      const regex = new RegExp(`(${safeEscapedQuery})`, 'gi');
+      return escapedText.replace(regex, '<mark>$1</mark>');
+    } catch {
+      return escapedText;
+    }
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     CONFLICT DETECTION
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Start periodic conflict checks. Runs every 60 seconds.
+   * Only actually checks if there are 2+ running sessions in the active workspace.
+   */
+  startConflictChecks() {
+    // Clear any existing interval
+    if (this._conflictCheckInterval) {
+      clearInterval(this._conflictCheckInterval);
+    }
+    // Run an initial check after a short delay (let sessions load first)
+    setTimeout(() => this.checkForConflicts(), 5000);
+    // Then check every 60 seconds
+    this._conflictCheckInterval = setInterval(() => this.checkForConflicts(), 60000);
+  }
+
+  async checkForConflicts() {
+    try {
+      const ws = this.state.activeWorkspace;
+      if (!ws) return;
+
+      // Count running sessions in the active workspace
+      const runningSessions = (this.state.allSessions || this.state.sessions || []).filter(s =>
+        s.workspaceId === ws.id && s.status === 'running'
+      );
+      if (runningSessions.length < 2) return;
+
+      const data = await this.api('GET', `/api/workspaces/${ws.id}/conflicts`);
+      const conflicts = data.conflicts || [];
+
+      if (conflicts.length === 0) return;
+
+      // Show a toast warning for each conflict (max 3 to avoid spam)
+      const shown = conflicts.slice(0, 3);
+      shown.forEach(c => {
+        const fileName = c.file || c.path || 'unknown file';
+        const sessionCount = c.sessions ? c.sessions.length : c.count || 2;
+        this.showToast(`Warning: ${fileName} is being edited by ${sessionCount} sessions`, 'warning');
+      });
+
+      // If there are more conflicts than shown, add a summary toast
+      if (conflicts.length > 3) {
+        this.showToast(`${conflicts.length - 3} more file conflicts detected in ${this.escapeHtml(ws.name)}`, 'warning');
+      }
+    } catch {
+      // Silently ignore conflict check failures — the API endpoint may not exist yet.
+      // This is a non-critical background check.
     }
   }
 }

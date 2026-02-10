@@ -11,7 +11,7 @@
  */
 
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, execSync } = require('child_process');
 const express = require('express');
 
 const { setupAuth, requireAuth, isValidToken } = require('./auth');
@@ -2337,6 +2337,384 @@ app.delete('/api/tunnels/:id', requireAuth, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Failed to kill tunnel: ' + err.message });
   }
+});
+
+// ──────────────────────────────────────────────────────────
+//  SESSION SEARCH (full-text across all JSONL files)
+// ──────────────────────────────────────────────────────────
+
+// ─── Search File List Cache (30s TTL) ──────────────────────
+let _searchFileCache = null;
+let _searchFileCacheTime = 0;
+const SEARCH_FILE_CACHE_TTL = 30000; // 30 seconds
+
+/**
+ * Build a list of all JSONL session files under ~/.claude/projects/.
+ * Returns an array of { filePath, sessionId, projectDir, encodedName, realPath, projectName }.
+ * Cached in memory for 30 seconds.
+ */
+function getSearchableFiles() {
+  const now = Date.now();
+  if (_searchFileCache && (now - _searchFileCacheTime) < SEARCH_FILE_CACHE_TTL) {
+    return _searchFileCache;
+  }
+
+  const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+  if (!fs.existsSync(claudeDir)) {
+    _searchFileCache = [];
+    _searchFileCacheTime = now;
+    return _searchFileCache;
+  }
+
+  const files = [];
+  try {
+    const entries = fs.readdirSync(claudeDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const projectDir = path.join(claudeDir, entry.name);
+      const realPath = decodeClaudePath(entry.name);
+      const projectName = realPath.split('\\').pop() || realPath.split('/').pop() || entry.name;
+
+      try {
+        const dirFiles = fs.readdirSync(projectDir).filter(f => f.endsWith('.jsonl'));
+        for (const f of dirFiles) {
+          files.push({
+            filePath: path.join(projectDir, f),
+            sessionId: f.replace('.jsonl', ''),
+            projectDir,
+            encodedName: entry.name,
+            realPath,
+            projectName,
+          });
+        }
+      } catch (_) {
+        // Skip directories that can't be read
+      }
+    }
+  } catch (_) {
+    // If the top-level read fails, return empty
+  }
+
+  _searchFileCache = files;
+  _searchFileCacheTime = now;
+  return files;
+}
+
+/**
+ * Extract a session name from the first user or assistant message content
+ * in a JSONL file (first 50 chars), or fall back to the session UUID.
+ * @param {string} filePath - Path to the .jsonl file
+ * @param {string} sessionId - Fallback UUID
+ * @returns {string} A human-readable session name
+ */
+function extractSessionName(filePath, sessionId) {
+  try {
+    // Read just the first 10KB to find the first meaningful message
+    const fd = fs.openSync(filePath, 'r');
+    const headSize = Math.min(10 * 1024, fs.fstatSync(fd).size);
+    const buf = Buffer.alloc(headSize);
+    fs.readSync(fd, buf, 0, headSize, 0);
+    fs.closeSync(fd);
+
+    const lines = buf.toString('utf-8').split('\n').filter(l => l.trim());
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        const inner = entry.message || entry;
+        const role = entry.type || inner.role;
+        if (role !== 'user' && role !== 'human' && role !== 'assistant') continue;
+
+        const c = inner.content;
+        let text = '';
+        if (typeof c === 'string') {
+          text = c;
+        } else if (Array.isArray(c)) {
+          const textBlocks = c.filter(b => b.type === 'text' && b.text);
+          text = textBlocks.map(b => b.text).join(' ');
+        }
+        // Skip system-generated and very short messages
+        if (!text || text.length < 5) continue;
+        if (text.startsWith('<') && text.includes('system-reminder')) continue;
+
+        // Clean up and truncate to 50 chars
+        text = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+        if (text.length > 50) {
+          text = text.substring(0, 50).replace(/\s+\S*$/, '') + '...';
+        }
+        return text;
+      } catch (_) {
+        // Skip unparseable lines
+      }
+    }
+  } catch (_) {
+    // Fall through to UUID
+  }
+  return sessionId;
+}
+
+/**
+ * GET /api/search?q=<query>&limit=20
+ * Full-text search across all Claude Code JSONL session files.
+ * Searches the message.content field (both string and array forms) case-insensitively.
+ * Returns matches with ~200 char snippets, sorted by timestamp descending.
+ * Protected by auth. Enforces a 5-second timeout, returning partial results if exceeded.
+ */
+app.get('/api/search', requireAuth, (req, res) => {
+  const query = req.query.q;
+  if (!query || typeof query !== 'string' || query.trim().length < 2) {
+    return res.status(400).json({ error: 'Query parameter "q" must be at least 2 characters.' });
+  }
+
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
+  const searchQuery = query.trim().toLowerCase();
+  const startTime = Date.now();
+  const TIMEOUT_MS = 5000; // 5-second timeout
+
+  const files = getSearchableFiles();
+  const results = [];
+  let totalMatches = 0;
+  let searchedFiles = 0;
+  let timedOut = false;
+
+  for (const fileInfo of files) {
+    // Check timeout before processing each file
+    if (Date.now() - startTime > TIMEOUT_MS) {
+      timedOut = true;
+      break;
+    }
+
+    searchedFiles++;
+
+    let content;
+    try {
+      content = fs.readFileSync(fileInfo.filePath, 'utf-8');
+    } catch (_) {
+      continue; // Skip files that can't be read
+    }
+
+    const lines = content.split('\n');
+    let sessionName = null; // Lazy — computed on first match
+
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      // Check timeout inside large files too
+      if (Date.now() - startTime > TIMEOUT_MS) {
+        timedOut = true;
+        break;
+      }
+
+      const line = lines[lineIdx];
+      if (!line.trim()) continue;
+
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch (_) {
+        continue; // Skip corrupt/binary lines
+      }
+
+      const inner = entry.message || entry;
+      const role = entry.type || inner.role;
+      if (role !== 'user' && role !== 'human' && role !== 'assistant') continue;
+
+      const c = inner.content;
+      let text = '';
+      if (typeof c === 'string') {
+        text = c;
+      } else if (Array.isArray(c)) {
+        const textBlocks = c.filter(b => b.type === 'text' && b.text);
+        text = textBlocks.map(b => b.text).join('');
+      }
+
+      if (!text) continue;
+
+      // Case-insensitive search
+      const lowerText = text.toLowerCase();
+      const matchIndex = lowerText.indexOf(searchQuery);
+      if (matchIndex === -1) continue;
+
+      totalMatches++;
+
+      // Only collect up to `limit` result objects
+      if (results.length < limit) {
+        // Lazy-load session name on first match for this file
+        if (sessionName === null) {
+          sessionName = extractSessionName(fileInfo.filePath, fileInfo.sessionId);
+        }
+
+        // Build ~200 char snippet around the match
+        const snippetRadius = 100;
+        const snippetStart = Math.max(0, matchIndex - snippetRadius);
+        const snippetEnd = Math.min(text.length, matchIndex + searchQuery.length + snippetRadius);
+        let snippet = text.substring(snippetStart, snippetEnd)
+          .replace(/[\r\n]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (snippetStart > 0) snippet = '...' + snippet;
+        if (snippetEnd < text.length) snippet = snippet + '...';
+
+        // Extract timestamp from the entry
+        const timestamp = entry.timestamp || null;
+
+        results.push({
+          sessionId: fileInfo.sessionId,
+          sessionName,
+          projectPath: fileInfo.realPath,
+          projectName: fileInfo.projectName,
+          timestamp,
+          role: (role === 'human') ? 'user' : role,
+          snippet,
+          lineNumber: lineIdx + 1, // 1-based line number
+        });
+      }
+    }
+
+    if (timedOut) break;
+  }
+
+  // Sort by timestamp descending (most recent first); null timestamps go last
+  results.sort((a, b) => {
+    if (!a.timestamp && !b.timestamp) return 0;
+    if (!a.timestamp) return 1;
+    if (!b.timestamp) return -1;
+    return new Date(b.timestamp) - new Date(a.timestamp);
+  });
+
+  const durationMs = Date.now() - startTime;
+
+  return res.json({
+    query: query.trim(),
+    results,
+    totalMatches,
+    searchedFiles,
+    durationMs,
+    timedOut,
+  });
+});
+
+// ──────────────────────────────────────────────────────────
+//  CONFLICT DETECTION (per workspace)
+// ──────────────────────────────────────────────────────────
+
+/**
+ * GET /api/workspaces/:id/conflicts
+ * Checks if multiple running sessions in a workspace are modifying the same files.
+ * Runs `git status --porcelain` in each session's workingDir to discover modified files,
+ * then cross-references to find overlapping edits.
+ * Protected by auth.
+ */
+app.get('/api/workspaces/:id/conflicts', requireAuth, (req, res) => {
+  const store = getStore();
+  const workspace = store.getWorkspace(req.params.id);
+
+  if (!workspace) {
+    return res.status(404).json({ error: 'Workspace not found.' });
+  }
+
+  const sessions = store.getWorkspaceSessions(req.params.id);
+
+  // Only consider running sessions with a workingDir
+  const runningSessions = sessions.filter(
+    (s) => s.status === 'running' && s.workingDir
+  );
+
+  if (runningSessions.length === 0) {
+    return res.json({
+      conflicts: [],
+      checkedSessions: 0,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // Collect modified files per session
+  // Map: sessionId → { id, name, files: string[] }
+  const sessionFiles = new Map();
+  let checkedSessions = 0;
+
+  for (const session of runningSessions) {
+    try {
+      const stdout = execSync('git status --porcelain', {
+        cwd: session.workingDir,
+        timeout: 3000,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'], // suppress stderr output
+      });
+
+      checkedSessions++;
+
+      const modifiedFiles = [];
+      const lines = stdout.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        // git status --porcelain format: XY filename
+        // X = staging area, Y = working tree
+        // Lines start with status codes like M, A, ??, D, R, etc.
+        const statusCode = line.substring(0, 2).trim();
+        if (!statusCode) continue;
+
+        // Skip deleted files (they're not actively being edited)
+        if (statusCode === 'D' || statusCode === 'DD') continue;
+
+        // Extract filename — for renamed files (R), the new name is after " -> "
+        let filename = line.substring(3).trim();
+        if (filename.includes(' -> ')) {
+          filename = filename.split(' -> ')[1].trim();
+        }
+        // Remove quotes if present (git adds them for special chars)
+        if (filename.startsWith('"') && filename.endsWith('"')) {
+          filename = filename.slice(1, -1);
+        }
+
+        // Normalize path separators to forward slashes for consistent comparison
+        filename = filename.replace(/\\/g, '/');
+
+        if (filename) {
+          modifiedFiles.push(filename);
+        }
+      }
+
+      if (modifiedFiles.length > 0) {
+        sessionFiles.set(session.id, {
+          id: session.id,
+          name: session.name || session.id.substring(0, 12),
+          files: modifiedFiles,
+        });
+      }
+    } catch (_) {
+      // git status failed (not a git repo, timeout, etc.) — skip this session
+      checkedSessions++;
+    }
+  }
+
+  // Cross-reference: find files that appear in 2+ sessions
+  const fileToSessions = new Map(); // filename → [{ id, name }]
+
+  for (const [, sessionInfo] of sessionFiles) {
+    for (const file of sessionInfo.files) {
+      if (!fileToSessions.has(file)) {
+        fileToSessions.set(file, []);
+      }
+      fileToSessions.get(file).push({ id: sessionInfo.id, name: sessionInfo.name });
+    }
+  }
+
+  const conflicts = [];
+  for (const [file, sessionsInConflict] of fileToSessions) {
+    if (sessionsInConflict.length >= 2) {
+      conflicts.push({
+        file,
+        sessions: sessionsInConflict,
+      });
+    }
+  }
+
+  // Sort conflicts by number of sessions involved (most conflicts first)
+  conflicts.sort((a, b) => b.sessions.length - a.sessions.length);
+
+  return res.json({
+    conflicts,
+    checkedSessions,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // ──────────────────────────────────────────────────────────
