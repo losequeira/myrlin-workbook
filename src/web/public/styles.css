@@ -589,7 +589,7 @@ textarea.input {
 .header-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
   overflow: visible;
   position: relative;
   z-index: 1;
@@ -601,9 +601,10 @@ textarea.input {
 }
 
 .header-logo-img {
-  width: 300px;
-  max-height: calc(var(--header-height) - 12px);
+  width: 32px;
+  height: 32px;
   object-fit: contain;
+  margin-right: 2px;
   filter: drop-shadow(0 0 8px rgba(203, 166, 247, 0.25));
   transition: filter 0.3s ease;
   pointer-events: auto;
@@ -1822,7 +1823,8 @@ textarea.input {
   }
 
   .header-logo-img {
-    width: 160px;
+    width: 24px;
+    height: 24px;
   }
 
   .view-tabs {
@@ -2193,16 +2195,39 @@ textarea.input {
 
 .context-menu-item .ctx-check {
   margin-left: auto;
-  opacity: 0.5;
+  opacity: 0.4;
   font-size: 12px;
 }
 
+/* Checked items get bright green checkmark and slightly highlighted text */
+.context-menu-item.ctx-checked .ctx-check {
+  color: var(--green);
+  opacity: 1;
+  font-weight: 700;
+}
+
+.context-menu-item.ctx-checked {
+  color: var(--text);
+}
+
+/* Danger items (e.g. bypass permissions when active) — red text and bright red check */
 .context-menu-item.ctx-danger {
   color: var(--red);
 }
 
+.context-menu-item.ctx-danger.ctx-checked {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.08);
+}
+
+.context-menu-item.ctx-danger.ctx-checked .ctx-check {
+  color: var(--red);
+  opacity: 1;
+  font-weight: 700;
+}
+
 .context-menu-item.ctx-danger:hover {
-  background: rgba(243, 139, 168, 0.1);
+  background: rgba(243, 139, 168, 0.15);
 }
 
 .context-menu-sep {
@@ -2944,6 +2969,20 @@ textarea.input {
 .terminal-pane-empty.drag-over .terminal-container {
   border-color: var(--mauve); color: var(--mauve);
   background: rgba(203, 166, 247, 0.05);
+}
+
+/* Terminal pane drag-to-reposition */
+.terminal-pane-header {
+  cursor: grab;
+}
+.terminal-pane-empty .terminal-pane-header {
+  cursor: default;
+}
+.terminal-pane-dragging {
+  opacity: 0.5;
+}
+.terminal-pane:not(.terminal-pane-dragging).drag-over {
+  box-shadow: inset 0 0 0 2px var(--mauve);
 }
 
 /* Active terminal pane highlight */
@@ -3708,6 +3747,38 @@ textarea.input {
 @media (prefers-reduced-motion: reduce) {
   .terminal-pane-loading { animation: none; border-color: var(--mauve); }
   .terminal-pane-loading .terminal-pane-title::after { animation: none; }
+}
+
+/* Terminal pane done — green flash when Claude finishes working */
+@keyframes pane-done-flash {
+  0% { box-shadow: inset 0 0 0 2px var(--green), 0 0 12px rgba(166, 227, 161, 0.3); }
+  100% { box-shadow: none; }
+}
+
+.terminal-pane-done {
+  animation: pane-done-flash 4s ease-out forwards;
+}
+
+/* Tab group notification badge — pulsing green dot on inactive group tabs */
+.terminal-group-tab.tab-notify {
+  position: relative;
+}
+.terminal-group-tab.tab-notify::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: loading-dot-pulse 2s ease-in-out infinite;
+}
+
+/* Respect reduced motion for completion notifications */
+@media (prefers-reduced-motion: reduce) {
+  .terminal-pane-done { animation: none; box-shadow: inset 0 0 0 2px var(--green); }
+  .terminal-group-tab.tab-notify::after { animation: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════ */

@@ -73,6 +73,10 @@ class TerminalPane {
     this._reconnectAttempts = 0;
     this._maxReconnectAttempts = 10;
     this._gotFirstData = false;
+    // Completion detection: track whether Claude is actively producing output
+    this._isWorking = false;
+    this._lastOutputTime = 0;
+    this._idleCheckTimer = null;
   }
 
   _log(msg) {
@@ -307,11 +311,15 @@ class TerminalPane {
             return;
           } else if (msg.type === 'output') {
             this.term.write(msg.data);
+            this._trackActivityForCompletion();
             return;
           }
         } catch (_) {}
       }
       this.term.write(data);
+
+      // Track activity for completion detection
+      this._trackActivityForCompletion();
     };
 
     this.ws.onclose = (event) => {
@@ -619,9 +627,67 @@ class TerminalPane {
     return this._mobileTypeMode;
   }
 
+  /* ═══════════════════════════════════════════════════════════
+     COMPLETION DETECTION
+     Detects when Claude transitions from "working" (producing output)
+     to "idle" (showing a prompt, ready for input). Uses a debounced
+     check: after 2 seconds of no new output, inspects the terminal
+     buffer's last line for prompt patterns (❯, $, >, Human:, etc.).
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Called after every terminal write. Marks the pane as working and
+   * schedules a debounced idle check — if no output arrives for 2s
+   * after the last burst, we inspect the buffer for a prompt.
+   */
+  _trackActivityForCompletion() {
+    this._lastOutputTime = Date.now();
+    if (!this._isWorking) {
+      this._isWorking = true;
+    }
+    // Debounced idle check — if no output for 2 seconds after burst, check for prompt
+    clearTimeout(this._idleCheckTimer);
+    this._idleCheckTimer = setTimeout(() => {
+      this._checkForCompletion();
+    }, 2000);
+  }
+
+  /**
+   * Inspect the terminal buffer's cursor line for prompt patterns.
+   * If a prompt is detected, dispatch a 'terminal-idle' CustomEvent
+   * so the app layer can show notifications, flash borders, etc.
+   */
+  _checkForCompletion() {
+    if (!this._isWorking || !this.term) return;
+
+    // Read the last line of the terminal buffer at the cursor position
+    const buffer = this.term.buffer.active;
+    const cursorRow = buffer.cursorY + buffer.baseY;
+    const line = buffer.getLine(cursorRow);
+    if (!line) return;
+
+    const lineText = line.translateToString(true).trim();
+
+    // Claude Code prompt patterns: ends with ❯, $, or >
+    // Also match "Human:" which appears in Claude's conversation UI
+    if (/[❯$>]\s*$/.test(lineText) || /^(Human:|Type.*message)/.test(lineText)) {
+      this._isWorking = false;
+
+      // Dispatch custom event for the app to handle
+      const container = document.getElementById(this.containerId);
+      if (container) {
+        container.dispatchEvent(new CustomEvent('terminal-idle', {
+          bubbles: true,
+          detail: { sessionId: this.sessionId, sessionName: this.sessionName }
+        }));
+      }
+    }
+  }
+
   dispose() {
     clearTimeout(this.reconnectTimer);
     clearTimeout(this._fitTimer);
+    clearTimeout(this._idleCheckTimer);
     if (this._touchScrollCleanup) this._touchScrollCleanup();
     if (this._resizeObserver) this._resizeObserver.disconnect();
     if (this.ws) { this.ws.onclose = null; this.ws.close(); }

@@ -337,13 +337,30 @@
 
 .action-sheet-item .as-check {
   margin-left: auto;
-  opacity: 0.5;
+  opacity: 0.4;
   font-size: 14px;
+}
+
+/* Checked items — bright green checkmark */
+.action-sheet-item.as-checked .as-check {
   color: var(--green);
+  opacity: 1;
+  font-weight: 700;
 }
 
 .action-sheet-item.as-danger {
   color: var(--red);
+}
+
+.action-sheet-item.as-danger.as-checked {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.08);
+}
+
+.action-sheet-item.as-danger.as-checked .as-check {
+  color: var(--red);
+  opacity: 1;
+  font-weight: 700;
 }
 
 .action-sheet-item[disabled] {

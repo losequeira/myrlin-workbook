@@ -496,6 +496,14 @@ class CWMApp {
       }
     });
 
+    // ─── Terminal Completion Notifications ─────────────────────
+    // When a terminal pane detects Claude has finished (prompt visible),
+    // it dispatches a 'terminal-idle' event. We listen at the document
+    // level because the event bubbles from the terminal container.
+    document.addEventListener('terminal-idle', (e) => {
+      this.onTerminalIdle(e.detail);
+    });
+
     // ─── Mobile: Bottom Tab Bar ─────────────────────────────
     if (this.els.mobileTabBar) {
       this.els.mobileTabBar.querySelectorAll('.mobile-tab').forEach(tab => {
@@ -1336,13 +1344,21 @@ class CWMApp {
       },
     });
 
-    // Open in terminal (quick action)
+    // Open in terminal (quick action) — pass all session flags as spawnOpts
     items.push({
       label: 'Open in Terminal', icon: '&#9654;', action: () => {
         const emptySlot = this.terminalPanes.findIndex(p => p === null);
         if (emptySlot !== -1) {
           this.setViewMode('terminal');
-          this.openTerminalInPane(emptySlot, sessionId, session.name);
+          const spawnOpts = {};
+          if (session.resumeSessionId) spawnOpts.resumeSessionId = session.resumeSessionId;
+          if (session.workingDir) spawnOpts.cwd = session.workingDir;
+          if (session.command) spawnOpts.command = session.command;
+          if (session.bypassPermissions) spawnOpts.bypassPermissions = true;
+          if (session.verbose) spawnOpts.verbose = true;
+          if (session.model) spawnOpts.model = session.model;
+          if (session.agentTeams) spawnOpts.agentTeams = true;
+          this.openTerminalInPane(emptySlot, sessionId, session.name, spawnOpts);
         } else {
           this.showToast('All terminal panes full. Close one first.', 'warning');
         }
@@ -1384,7 +1400,7 @@ class CWMApp {
     // Flags
     const isAgentTeams = !!session.agentTeams;
     items.push(
-      { label: 'Bypass Permissions', icon: '&#9888;', action: () => this.toggleBypass(sessionId), check: isBypassed },
+      { label: 'Bypass Permissions', icon: '&#9888;', action: () => this.toggleBypass(sessionId), check: isBypassed, danger: isBypassed },
       { label: 'Verbose', icon: '&#128483;', action: () => this.toggleVerbose(sessionId), check: isVerbose },
       { label: 'Agent Teams', icon: '&#129302;', action: () => this.toggleAgentTeams(sessionId), check: isAgentTeams },
     );
@@ -1400,6 +1416,7 @@ class CWMApp {
         navigator.clipboard.writeText(session.resumeSessionId || session.id);
         this.showToast('Session ID copied', 'success');
       }},
+      { label: 'Start with Context', icon: '&#128218;', action: () => this.startSessionWithContext(sessionId) },
     );
 
     // If the session has a working directory, add git worktree option
@@ -1523,6 +1540,11 @@ class CWMApp {
       },
     });
 
+    // Start a new session with project context pre-injected
+    items.push({
+      label: 'Start with Context', icon: '&#128218;', action: () => this.startProjectWithContext(projectPath),
+    });
+
     items.push({ type: 'sep' });
 
     // Hide/unhide project session
@@ -1583,6 +1605,15 @@ class CWMApp {
       navigator.clipboard.writeText(encodedName);
       this.showToast('Encoded name copied', 'success');
     }});
+
+    items.push({ type: 'sep' });
+
+    // Start a new session with project context pre-injected
+    if (projectPath) {
+      items.push({
+        label: 'Start with Context', icon: '&#128218;', action: () => this.startProjectWithContext(projectPath),
+      });
+    }
 
     this._renderContextItems(displayName, items, x, y);
   }
@@ -2022,6 +2053,112 @@ class CWMApp {
     } catch (err) {
       this.showToast(err.message || 'Failed to restart session', 'error');
     }
+  }
+
+  /**
+   * Start a new Claude session with project context pre-injected.
+   * Creates a new session in the same workspace/directory, then sends an
+   * initial orientation prompt when the terminal connects.
+   */
+  async startSessionWithContext(sessionId) {
+    const session = (this.state.allSessions || this.state.sessions).find(s => s.id === sessionId)
+      || this._findProjectSession(sessionId);
+
+    const dir = session ? (session.workingDir || '') : '';
+    const wsId = session ? session.workspaceId : (this.state.activeWorkspace ? this.state.activeWorkspace.id : null);
+
+    if (!dir) {
+      this.showToast('No working directory found for this session', 'warning');
+      return;
+    }
+
+    await this._launchContextSession(dir, wsId);
+  }
+
+  /**
+   * Start a new Claude session with project context from a project directory path.
+   * Used by the project-level and project-session context menus.
+   */
+  async startProjectWithContext(projectPath) {
+    if (!projectPath) {
+      this.showToast('No project path available', 'warning');
+      return;
+    }
+
+    const wsId = this.state.activeWorkspace ? this.state.activeWorkspace.id : null;
+    await this._launchContextSession(projectPath, wsId);
+  }
+
+  /**
+   * Shared implementation: create a new session in a directory and inject a
+   * context-orientation prompt once the terminal WebSocket connects.
+   */
+  async _launchContextSession(dir, wsId) {
+    const dirParts = dir.replace(/\\/g, '/').split('/');
+    const projectName = dirParts[dirParts.length - 1] || 'project';
+
+    try {
+      // Create a new session in the workspace (or unassigned if no workspace)
+      const payload = {
+        name: `${projectName} - context`,
+        workspaceId: wsId,
+        workingDir: dir,
+        command: 'claude',
+      };
+      const data = await this.api('POST', '/api/sessions', payload);
+      const newSession = data.session || data;
+      await this.loadSessions();
+
+      // Open in first empty terminal pane
+      const emptySlot = this.terminalPanes.findIndex(p => p === null);
+      if (emptySlot === -1) {
+        this.showToast('All terminal panes full. Session created but not opened.', 'warning');
+        return;
+      }
+
+      this.setViewMode('terminal');
+
+      // Build the context prompt that orients Claude on the project
+      const contextPrompt = `Read and analyze this project directory. Look at the file structure, any README, CLAUDE.md, PLANNING.md, TODO.md, package.json, or similar files. Understand the tech stack, architecture, and current state of the project. Then give me a brief summary of what you found and ask what I'd like to work on.`;
+
+      // Open the terminal with the session's working directory
+      this.openTerminalInPane(emptySlot, newSession.id, newSession.name, { cwd: dir });
+
+      // Wait for the terminal to connect, then send the context prompt
+      const tp = this.terminalPanes[emptySlot];
+      if (tp) {
+        const checkReady = setInterval(() => {
+          if (tp.ws && tp.ws.readyState === WebSocket.OPEN && tp.connected) {
+            clearInterval(checkReady);
+            // Wait for Claude to finish initializing before sending the prompt
+            setTimeout(() => {
+              tp.ws.send(JSON.stringify({ type: 'input', data: contextPrompt + '\n' }));
+            }, 3000);
+          }
+        }, 500);
+        // Timeout after 30 seconds to avoid leaking intervals
+        setTimeout(() => clearInterval(checkReady), 30000);
+      }
+
+      this.showToast(`Starting ${projectName} with project context...`, 'info');
+    } catch (err) {
+      this.showToast(err.message || 'Failed to start context session', 'error');
+    }
+  }
+
+  /**
+   * Try to find a project session by sessionId (Claude UUID).
+   * Used when starting a context session from a project-panel session.
+   */
+  _findProjectSession(sessionId) {
+    for (const project of (this.state.projects || [])) {
+      for (const s of (project.sessions || [])) {
+        if (s.name === sessionId) {
+          return { workingDir: project.realPath || '', workspaceId: this.state.activeWorkspace ? this.state.activeWorkspace.id : null };
+        }
+      }
+    }
+    return null;
   }
 
   async restartAllSessions() {
@@ -3268,7 +3405,16 @@ class CWMApp {
             if (!session.resumeSessionId) {
               this.showToast('Starting new Claude session (no previous conversation to resume)', 'info');
             }
-            this.openTerminalInPane(emptySlot, sessionId, session.name);
+            // Pass session flags as spawnOpts so bypass/model/verbose carry through
+            const spawnOpts = {};
+            if (session.resumeSessionId) spawnOpts.resumeSessionId = session.resumeSessionId;
+            if (session.workingDir) spawnOpts.cwd = session.workingDir;
+            if (session.command) spawnOpts.command = session.command;
+            if (session.bypassPermissions) spawnOpts.bypassPermissions = true;
+            if (session.verbose) spawnOpts.verbose = true;
+            if (session.model) spawnOpts.model = session.model;
+            if (session.agentTeams) spawnOpts.agentTeams = true;
+            this.openTerminalInPane(emptySlot, sessionId, session.name, spawnOpts);
           } else {
             this.showToast('All terminal panes are full. Close one first.', 'warning');
           }
@@ -4187,10 +4333,9 @@ class CWMApp {
           const isProject = hasType(e.dataTransfer.types, 'cwm/project');
           const isProjectSession = hasType(e.dataTransfer.types, 'cwm/project-session');
           const isWorkspace = hasType(e.dataTransfer.types, 'cwm/workspace');
-          if (isSession || isProject || isProjectSession || isWorkspace) {
+          const isTerminalSwap = hasType(e.dataTransfer.types, 'cwm/terminal-swap');
+          if (isSession || isProject || isProjectSession || isWorkspace || isTerminalSwap) {
             e.preventDefault();
-            // Match the effectAllowed set by the drag source:
-            // sessions use 'move', projects/project-sessions use 'copy', workspaces use 'move'
             e.dataTransfer.dropEffect = (isProject || isProjectSession) ? 'copy' : 'move';
             pane.classList.add('drag-over');
           }
@@ -4202,6 +4347,16 @@ class CWMApp {
           e.preventDefault();
           pane.classList.remove('drag-over');
           console.log('[DnD] Drop on pane', slotIdx, 'types:', Array.from(e.dataTransfer.types));
+
+          // Terminal pane swap/reposition — drag a pane header onto another pane
+          const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
+          if (swapSource !== '') {
+            const srcSlot = parseInt(swapSource, 10);
+            if (srcSlot !== slotIdx) {
+              this.swapTerminalPanes(srcSlot, slotIdx);
+            }
+            return;
+          }
 
           // Drop an app session into terminal pane
           const sessionId = e.dataTransfer.getData('cwm/session');
@@ -4295,6 +4450,24 @@ class CWMApp {
         const closeBtn = pane.querySelector('.terminal-pane-close');
         if (closeBtn) {
           closeBtn.addEventListener('click', () => this.closeTerminalPane(slotIdx));
+        }
+
+        // Drag-to-reposition: make pane header draggable to swap panes
+        const header = pane.querySelector('.terminal-pane-header');
+        if (header) {
+          header.setAttribute('draggable', 'true');
+          header.addEventListener('dragstart', (e) => {
+            const tp = this.terminalPanes[slotIdx];
+            if (!tp) { e.preventDefault(); return; } // empty pane — not draggable
+            e.dataTransfer.setData('cwm/terminal-swap', String(slotIdx));
+            e.dataTransfer.effectAllowed = 'move';
+            pane.classList.add('terminal-pane-dragging');
+          });
+          header.addEventListener('dragend', () => {
+            pane.classList.remove('terminal-pane-dragging');
+            // Clean up any lingering drag-over styles
+            document.querySelectorAll('.terminal-pane').forEach(p => p.classList.remove('drag-over'));
+          });
         }
 
         // Click-to-focus: clicking/tapping anywhere in a pane focuses its terminal
@@ -4520,6 +4693,74 @@ class CWMApp {
     }
   }
 
+  /**
+   * Swap two terminal panes in the grid.
+   * Swaps the xterm DOM nodes and the terminalPanes array entries.
+   * If one slot is empty, it becomes a move instead of a swap.
+   */
+  swapTerminalPanes(srcSlot, dstSlot) {
+    console.log(`[DnD] Swapping panes: slot ${srcSlot} <-> slot ${dstSlot}`);
+    const srcTp = this.terminalPanes[srcSlot];
+    const dstTp = this.terminalPanes[dstSlot];
+
+    // Swap in the array
+    this.terminalPanes[srcSlot] = dstTp;
+    this.terminalPanes[dstSlot] = srcTp;
+
+    // Update DOM for both panes
+    [srcSlot, dstSlot].forEach(slot => {
+      const tp = this.terminalPanes[slot];
+      const paneEl = document.getElementById(`term-pane-${slot}`);
+      const container = document.getElementById(`term-container-${slot}`);
+      const titleEl = paneEl ? paneEl.querySelector('.terminal-pane-title') : null;
+      const closeBtn = paneEl ? paneEl.querySelector('.terminal-pane-close') : null;
+      if (!paneEl) return;
+
+      if (tp) {
+        // Occupied pane — move the terminal DOM
+        paneEl.hidden = false;
+        paneEl.classList.remove('terminal-pane-empty');
+        if (titleEl) titleEl.textContent = tp.sessionName || tp.sessionId;
+        if (closeBtn) closeBtn.hidden = false;
+        // Move the xterm element into the new container
+        if (container && tp.term) {
+          container.innerHTML = '';
+          const xtermEl = tp.term.element;
+          if (xtermEl && xtermEl.parentElement) {
+            container.appendChild(xtermEl.parentElement);
+          }
+        }
+      } else {
+        // Empty pane — reset to drop target
+        paneEl.classList.remove('terminal-pane-active');
+        paneEl.classList.add('terminal-pane-empty');
+        if (titleEl) titleEl.textContent = 'Drop a session here';
+        if (closeBtn) closeBtn.hidden = true;
+        if (container) container.innerHTML = '';
+      }
+    });
+
+    // Update active pane tracking
+    if (this._activeTerminalSlot === srcSlot) {
+      this._activeTerminalSlot = dstSlot;
+    } else if (this._activeTerminalSlot === dstSlot) {
+      this._activeTerminalSlot = srcSlot;
+    }
+
+    // Update grid layout and refit terminals
+    this.updateTerminalGridLayout();
+
+    // Refit after the swap so terminals size correctly
+    requestAnimationFrame(() => {
+      [srcSlot, dstSlot].forEach(slot => {
+        const tp = this.terminalPanes[slot];
+        if (tp && tp.fitAddon) {
+          try { tp.fitAddon.fit(); } catch (_) {}
+        }
+      });
+    });
+  }
+
   updateTerminalGridLayout() {
     const grid = this.els.terminalGrid;
     if (!grid) return;
@@ -4559,6 +4800,91 @@ class CWMApp {
         if (tp && tp.fitAddon) try { tp.fitAddon.fit(); } catch (_) {}
       });
     }); });
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     TERMINAL COMPLETION NOTIFICATIONS
+     When Claude finishes working in a terminal pane, the TerminalPane
+     class dispatches a 'terminal-idle' CustomEvent. These methods
+     handle the notification: flash the pane border green, play a
+     subtle chime, show a toast, and highlight the tab group if the
+     pane is in a non-active group.
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Handle terminal-idle event from a TerminalPane.
+   * Only notifies for non-active panes so the user isn't spammed
+   * when they're already looking at the terminal that finished.
+   */
+  onTerminalIdle({ sessionId, sessionName }) {
+    // Don't notify for the currently focused/active pane
+    const activeIdx = this.terminalPanes.findIndex(tp => tp && tp.sessionId === sessionId);
+    if (activeIdx === this._activeTerminalSlot) return;
+
+    // Flash the pane border green
+    const paneEls = document.querySelectorAll('.terminal-pane');
+    if (paneEls[activeIdx]) {
+      paneEls[activeIdx].classList.add('terminal-pane-done');
+      setTimeout(() => paneEls[activeIdx].classList.remove('terminal-pane-done'), 4000);
+    }
+
+    // Play a subtle notification sound using Web Audio API
+    this._playNotificationSound();
+
+    // Show toast
+    const name = sessionName || sessionId.substring(0, 12);
+    this.showToast(`${name} is ready for input`, 'success');
+
+    // If the pane is in a non-active tab group, highlight the tab
+    this._highlightTabGroupForSession(sessionId);
+  }
+
+  /**
+   * Play a short two-tone chime via the Web Audio API.
+   * Volume is kept low (0.08) to be noticeable but not jarring.
+   */
+  _playNotificationSound() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, ctx.currentTime);
+      osc.frequency.setValueAtTime(1000, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.3);
+    } catch (_) {
+      // Web Audio not available — silent fallback
+    }
+  }
+
+  /**
+   * When a session finishes in a non-active tab group, highlight
+   * that group's tab button with a pulsing green dot so the user
+   * knows something needs attention in another group.
+   */
+  _highlightTabGroupForSession(sessionId) {
+    if (!this._tabGroups || !this._activeGroupId) return;
+    // Find which group this session's pane belongs to
+    for (const group of this._tabGroups) {
+      if (group.id === this._activeGroupId) continue;
+      const panes = group.panes || [];
+      if (panes.some(p => p && p.sessionId === sessionId)) {
+        // Highlight the tab button
+        const tabBtn = document.querySelector(`.terminal-group-tab[data-group-id="${group.id}"]`);
+        if (tabBtn && !tabBtn.classList.contains('tab-notify')) {
+          tabBtn.classList.add('tab-notify');
+          // Remove after 10s or when the tab is clicked
+          setTimeout(() => tabBtn.classList.remove('tab-notify'), 10000);
+        }
+        break;
+      }
+    }
   }
 
 
@@ -4738,6 +5064,7 @@ class CWMApp {
       if (item.type === 'sep') return '<div class="action-sheet-sep"></div>';
       const cls = ['action-sheet-item'];
       if (item.danger) cls.push('as-danger');
+      if (item.check) cls.push('as-checked');
       const disabledAttr = item.disabled ? ' disabled' : '';
       const icon = item.icon ? `<span class="as-icon">${item.icon}</span>` : '';
       const check = (item.check !== undefined) ? `<span class="as-check">${item.check ? '&#10003;' : ''}</span>` : '';
@@ -4801,6 +5128,7 @@ class CWMApp {
       if (item.type === 'sep') return '<div class="context-menu-sep"></div>';
       const cls = ['context-menu-item'];
       if (item.danger) cls.push('ctx-danger');
+      if (item.check) cls.push('ctx-checked');
       const disabledAttr = item.disabled ? ' disabled' : '';
       const checkMark = item.check !== undefined ? `<span class="ctx-check">${item.check ? '&#10003;' : ''}</span>` : '';
       return `<button class="${cls.join(' ')}"${disabledAttr} data-action="${item.label}">
