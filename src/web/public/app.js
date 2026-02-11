@@ -3129,9 +3129,47 @@ class CWMApp {
 
     toast.querySelector('.toast-close').addEventListener('click', () => this.dismissToast(toast));
 
+    // Swipe-to-dismiss: drag right to remove
+    let startX = 0, currentX = 0, dragging = false;
+    const onPointerDown = (e) => {
+      startX = e.clientX;
+      currentX = 0;
+      dragging = true;
+      toast.classList.add('toast-dragging');
+      toast.setPointerCapture(e.pointerId);
+    };
+    const onPointerMove = (e) => {
+      if (!dragging) return;
+      currentX = e.clientX - startX;
+      // Only allow dragging to the right
+      const offset = Math.max(0, currentX);
+      toast.style.transform = `translateX(${offset}px)`;
+      toast.style.opacity = Math.max(0, 1 - offset / 200);
+    };
+    const onPointerUp = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      toast.classList.remove('toast-dragging');
+      if (currentX > 80) {
+        // Swiped far enough — dismiss
+        toast.classList.add('toast-swipe-exit');
+        toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+        // Fallback removal if transitionend doesn't fire
+        setTimeout(() => { if (toast.parentNode) toast.remove(); }, 300);
+      } else {
+        // Snap back
+        toast.style.transform = '';
+        toast.style.opacity = '';
+      }
+    };
+    toast.addEventListener('pointerdown', onPointerDown);
+    toast.addEventListener('pointermove', onPointerMove);
+    toast.addEventListener('pointerup', onPointerUp);
+
     this.els.toastContainer.appendChild(toast);
 
-    // No auto-dismiss — user must click the X to close
+    // Auto-dismiss after 60 seconds
+    setTimeout(() => this.dismissToast(toast), 60000);
   }
 
   dismissToast(toast) {
