@@ -3131,8 +3131,7 @@ class CWMApp {
 
     this.els.toastContainer.appendChild(toast);
 
-    // Auto-dismiss after 4 seconds
-    setTimeout(() => this.dismissToast(toast), 4000);
+    // No auto-dismiss — user must click the X to close
   }
 
   dismissToast(toast) {
