@@ -3179,7 +3179,10 @@ class CWMApp {
 
     // Swipe-to-dismiss: drag right to remove
     let startX = 0, currentX = 0, dragging = false;
+    const closeBtn = toast.querySelector('.toast-close');
     const onPointerDown = (e) => {
+      // Don't start drag from the close button — let click handle it
+      if (closeBtn && closeBtn.contains(e.target)) return;
       startX = e.clientX;
       currentX = 0;
       dragging = true;
@@ -3223,7 +3226,9 @@ class CWMApp {
   dismissToast(toast) {
     if (!toast.parentNode) return;
     toast.classList.add('toast-exit');
-    toast.addEventListener('animationend', () => toast.remove());
+    toast.addEventListener('animationend', () => toast.remove(), { once: true });
+    // Fallback removal if animationend doesn't fire
+    setTimeout(() => { if (toast.parentNode) toast.remove(); }, 300);
   }
 
 
