@@ -1825,10 +1825,44 @@ class CWMApp {
       this.showToast('Encoded name copied', 'success');
     }});
 
-    items.push({ type: 'sep' });
-
-    // Start a new session with project context pre-injected
     if (projectPath) {
+      items.push({ type: 'sep' });
+
+      // New Claude session in this project directory
+      items.push({
+        label: 'New Session Here', icon: '&#9654;', action: () => {
+          const emptySlot = this.terminalPanes.findIndex(p => p === null);
+          if (emptySlot === -1) {
+            this.showToast('All terminal panes full. Close one first.', 'warning');
+            return;
+          }
+          const sid = 'proj-' + Date.now().toString(36);
+          this.setViewMode('terminal');
+          this.openTerminalInPane(emptySlot, sid, displayName, {
+            cwd: projectPath,
+            command: 'claude',
+          });
+        },
+      });
+
+      items.push({
+        label: 'New Session (Bypass)', icon: '&#9888;', action: () => {
+          const emptySlot = this.terminalPanes.findIndex(p => p === null);
+          if (emptySlot === -1) {
+            this.showToast('All terminal panes full. Close one first.', 'warning');
+            return;
+          }
+          const sid = 'proj-' + Date.now().toString(36);
+          this.setViewMode('terminal');
+          this.openTerminalInPane(emptySlot, sid, displayName, {
+            cwd: projectPath,
+            command: 'claude',
+            bypassPermissions: true,
+          });
+        },
+      });
+
+      // Start a new session with project context pre-injected
       items.push({
         label: 'Start with Context', icon: '&#128218;', action: () => this.startProjectWithContext(projectPath),
       });
