@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 [![Tests](https://img.shields.io/badge/Tests-26%20passing-brightgreen.svg)]()
 
-Discovers every Claude Code session you've ever run by scanning `~/.claude/projects/`. Organizes them into workspaces. Gives you 4-pane terminal access, cost tracking, docs, and a kanban board -- all from your browser.
+Discovers every Claude Code session you've ever run by scanning `~/.claude/projects/`. Organizes them into workspaces. Gives you 4-pane terminal access, cost tracking, docs, and a kanban board, all from your browser.
 
 > Currently supports Claude Code. Other AI coding tools on the [roadmap](#roadmap).
 
@@ -86,13 +86,13 @@ This gives you a single dashboard to organize and run all of it.
 
 ### Why not the existing tools?
 
-There are good tools out there -- [Opcode](https://github.com/winfunc/opcode), [Claude Squad](https://github.com/smtg-ai/claude-squad), [CloudCLI](https://github.com/siteboon/claudecodeui), [Crystal](https://github.com/stravu/crystal), the official Claude Code desktop app. I tried them. Here's what pushed me to build this:
+There are good tools out there: [Opcode](https://github.com/winfunc/opcode), [Claude Squad](https://github.com/smtg-ai/claude-squad), [CloudCLI](https://github.com/siteboon/claudecodeui), [Crystal](https://github.com/stravu/crystal), the official Claude Code desktop app. I tried them. Here's what pushed me to build this:
 
-- **Most require tmux** -- Claude Squad, Agent Deck, ccswitch, Agent of Empires are all tmux-based. I'm on Windows. Not an option without WSL.
-- **Desktop apps aren't accessible remotely** -- Opcode and Crystal are desktop-only. I wanted to check on sessions from my phone or another machine. This runs in a browser with optional Cloudflare tunnel access.
-- **Worktrees-only isn't enough** -- Most competitors organize *exclusively* around git worktrees. I wanted workspaces with attached docs, notes, goals, and kanban boards as the primary mental model -- but with worktree support built in for when you need it. Myrlin gives you both: workspace-first organization + "New Feature Session" one-click branch/worktree/session flow when you want git isolation.
-- **No session discovery** -- Most tools only manage sessions you create through them. This scans `~/.claude/projects/` and finds every session you've ever run, auto-titles them from the conversation content, and lets you import them.
-- **CloudCLI is closest** but it's more of a remote IDE (file explorer, code editor). I wanted a session *command center* -- terminals, workspace docs, resource monitoring, not another editor.
+- **Most require tmux.** Claude Squad, Agent Deck, ccswitch, Agent of Empires are all tmux-based. I'm on Windows. Not an option without WSL.
+- **Desktop apps aren't accessible remotely.** Opcode and Crystal are desktop-only. I wanted to check on sessions from my phone or another machine. This runs in a browser with optional Cloudflare tunnel access.
+- **Worktrees-only isn't enough.** Most competitors organize *exclusively* around git worktrees. I wanted workspaces with attached docs, notes, goals, and kanban boards as the primary mental model, but with worktree support built in for when you need it. Myrlin gives you both: workspace-first organization + "New Feature Session" one-click branch/worktree/session flow when you want git isolation.
+- **No session discovery.** Most tools only manage sessions you create through them. This scans `~/.claude/projects/` and finds every session you've ever run, auto-titles them from the conversation content, and lets you import them.
+- **CloudCLI is closest** but it's more of a remote IDE (file explorer, code editor). I wanted a session *command center*, not another editor. Terminals, workspace docs, resource monitoring.
 
 What those tools do better than this: Opcode has 20k stars and cost tracking. Claude Squad supports 5+ AI tools. Agent Deck has MCP socket pooling. Crystal has great git integration. This is alpha and Claude-only (for now). Just being honest.
 
@@ -116,13 +116,13 @@ What those tools do better than this: Opcode has 20k stars and cost tracking. Cl
 - Group workspaces under umbrella folders
 - Drag-and-drop sessions into terminal panes
 - Session state tracking (running / stopped / error) with PID monitoring
-- State persists to disk -- survives crashes and restarts
+- State persists to disk. Survives crashes and restarts
 - Auto-recovery on startup (detects orphaned sessions, restores state)
 
 ### Embedded Terminals
 
 - 4-pane terminal grid (xterm.js + node-pty + WebSocket)
-- Tab groups -- named sets of terminal panes ("Research", "Debug"), switchable and persistent
+- Tab groups: named sets of terminal panes ("Research", "Debug"), switchable and persistent
 - PTY sessions survive page refresh
 - Scrollback replay on reconnect
 - Model selection (Opus, Sonnet, Haiku) and session resume (`--resume`)
@@ -135,21 +135,21 @@ What those tools do better than this: Opcode has 20k stars and cost tracking. Cl
 - Notes, Goals, Tasks, Rules, and Roadmap sections per workspace
 - Kanban-style feature board (Planned -> Active -> Review -> Done)
 - Markdown editor with formatting toolbar
-- AI Insights tab -- auto-generated summaries of workspace sessions
+- AI Insights tab: auto-generated summaries of workspace sessions
 
 ![Feature tracking Kanban board](docs/images/kanban-board.png)
 
 ### Git & Worktree Management
 
-- Full git status per workspace -- current branch, dirty/clean, ahead/behind remote
+- Full git status per workspace: current branch, dirty/clean, ahead/behind remote
 - Branch listing and worktree CRUD via API (`GET/POST/DELETE /api/git/worktrees`, `GET /api/git/branches`)
-- **"New Feature Session"** -- right-click a workspace -> creates a branch + worktree + Claude session in one click
-- Worktree-aware session launching -- sessions opened in a worktree directory use that worktree's branch automatically
+- **"New Feature Session"**: right-click a workspace -> creates a branch + worktree + Claude session in one click
+- Worktree-aware session launching. Sessions opened in a worktree directory use that worktree's branch automatically
 - Branch badges on session rows show which branch each session is working on
 
 ### Port Detection & Resource Monitoring
 
-- Automatic port detection for running sessions via `getProcessPorts()` -- uses PowerShell `Get-NetTCPConnection` on Windows, `lsof` on Unix
+- Automatic port detection for running sessions via `getProcessPorts()`. Uses PowerShell `Get-NetTCPConnection` on Windows, `lsof` on Unix
 - Crawls child process trees to find ports opened by Claude and any tools it spawns
 - Ports shown in the Resources tab alongside CPU and memory per session
 - System overview (CPU, RAM, uptime)
@@ -158,7 +158,7 @@ What those tools do better than this: Opcode has 20k stars and cost tracking. Cl
 
 ### Themes
 
-![All 4 Catppuccin themes -- Mocha, Macchiato, Frappe, and Latte](docs/images/theme-showcase.png)
+![All 4 Catppuccin themes: Mocha, Macchiato, Frappe, and Latte](docs/images/theme-showcase.png)
 
 4 Catppuccin themes: Mocha (dark), Macchiato, Frappe, and Latte (light). Toggle from the header.
 
@@ -190,11 +190,11 @@ npm run gui
 cloudflared tunnel --url http://localhost:3456
 ```
 
-Cloudflared gives you a public URL. Open it from any device, log in with your password. All WebSocket terminal connections, SSE streams, and REST API calls route through the tunnel -- full functionality from anywhere.
+Cloudflared gives you a public URL. Open it from any device, log in with your password. All WebSocket terminal connections, SSE streams, and REST API calls route through the tunnel. Full functionality from anywhere.
 
 For a stable URL (e.g., `yourname.myrlin.dev`), see the [Cloudflare tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) on named tunnels.
 
-Combined with automatic port detection, you can see which ports your Claude sessions have opened (dev servers, databases, etc.) directly from the Resources tab -- useful for knowing what's running remotely.
+Combined with automatic port detection, you can see which ports your Claude sessions have opened (dev servers, databases, etc.) directly from the Resources tab. Useful for knowing what's running remotely.
 
 ---
 
@@ -328,13 +328,13 @@ npm install -g windows-build-tools
 
 ## License
 
-**AGPL-3.0** -- Use, modify, self-host freely. If you run a modified version as a public service, you must publish source. See [LICENSE](LICENSE).
+**AGPL-3.0.** Use, modify, self-host freely. If you run a modified version as a public service, you must publish source. See [LICENSE](LICENSE).
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome. No build step -- clone, `npm install`, hack.
+Issues and PRs welcome. No build step. Clone, `npm install`, hack.
 
 ```bash
 npm test        # 26 tests
