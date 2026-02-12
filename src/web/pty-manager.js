@@ -123,17 +123,32 @@ class PtySessionManager {
     // Spawn PTY process via cmd.exe on Windows
     // Use /c so cmd.exe exits when Claude exits (Ctrl+C, completion, crash)
     // This prevents stale cmd prompts when re-opening sessions
-    const ptyProcess = pty.spawn('cmd.exe', ['/c', fullCommand], {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd: resolvedCwd,
-      env: sessionEnv,
-      useConpty: true,
-    });
+    let ptyProcess;
+    try {
+      ptyProcess = pty.spawn('cmd.exe', ['/c', fullCommand], {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: resolvedCwd,
+        env: sessionEnv,
+        useConpty: true,
+      });
+    } catch (err) {
+      console.error(`[PTY] Failed to spawn for session ${sessionId}:`, err.message);
+      return null; // caller should check for null
+    }
 
     const session = new PtySession(sessionId, ptyProcess);
     this.sessions.set(sessionId, session);
+
+    // Handle asynchronous PTY process errors (e.g. process crashes after spawn).
+    // Guard with typeof check since node-pty's IPty may not always expose .on()
+    if (typeof ptyProcess.on === 'function') {
+      ptyProcess.on('error', (err) => {
+        console.error(`[PTY] Process error for session ${sessionId}:`, err.message);
+        session.alive = false;
+      });
+    }
 
     // PTY output handler: buffer + broadcast as raw binary (no JSON wrapping)
     ptyProcess.onData((data) => {

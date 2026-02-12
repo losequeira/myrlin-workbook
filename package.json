@@ -1,6 +1,7 @@
 {
   "name": "claude-workspace-manager",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "description": "Browser-based workspace manager for Claude Code sessions — session discovery, multi-terminal, cost tracking, docs, and kanban board",
   "main": "src/index.js",
   "bin": {
     "cwm": "./src/index.js"
@@ -16,16 +17,29 @@
     "marketing:gifs": "node scripts/marketing/capture.js --gifs-only && node scripts/marketing/gifify.js",
     "marketing:setup": "npx playwright install chromium"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/therealarthur/myrlin-workbook.git"
+  },
+  "homepage": "https://github.com/therealarthur/myrlin-workbook",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "keywords": [
     "claude",
     "workspace",
     "manager",
     "terminal",
-    "tui"
+    "tui",
+    "ai",
+    "coding-assistant",
+    "session-manager",
+    "developer-tools",
+    "xterm",
+    "myrlin"
   ],
   "author": "Arthur",
   "license": "AGPL-3.0-only",
-  "description": "Lightweight terminal workspace manager for Claude Code sessions",
   "dependencies": {
     "blessed": "^0.1.81",
     "blessed-contrib": "^4.11.0",

@@ -1,13 +1,31 @@
 # Myrlin Workbook
 
-Manage multiple Claude Code sessions from one browser tab. Workspaces, embedded terminals, session discovery, notes — all local.
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-26%20passing-brightgreen.svg)]()
+
+Discovers every Claude Code session you've ever run by scanning `~/.claude/projects/`. Organizes them into workspaces. Gives you 4-pane terminal access, cost tracking, docs, and a kanban board -- all from your browser.
 
 > Currently supports Claude Code. Other AI coding tools on the [roadmap](#roadmap).
 
-![Terminal grid with 4 Claude Code sessions running simultaneously](docs/images/terminal-grid.png)
+<p align="center">
+  <img src="marketing/gifs/terminal-typing.gif" alt="Multi-terminal Claude sessions" width="800">
+</p>
+
+---
 
 ## Quick Start
 
+### Quick Try (no config needed)
+```bash
+git clone https://github.com/therealarthur/myrlin-workbook.git
+cd myrlin-workbook
+npm install
+npm run gui:demo  # Opens with sample data
+```
+
+### Full Setup
 ```bash
 git clone https://github.com/therealarthur/myrlin-workbook.git
 cd myrlin-workbook
@@ -18,8 +36,20 @@ npm run gui
 On first launch, a random password is generated and printed to the console. It's saved to `state/config.json` for next time.
 
 **Custom password:**
+
+**Bash/zsh:**
 ```bash
-CWM_PASSWORD=your-password npm run gui
+CWM_PASSWORD=mypassword npm run gui
+```
+
+**PowerShell:**
+```powershell
+$env:CWM_PASSWORD="mypassword"; npm run gui
+```
+
+**cmd.exe:**
+```cmd
+set CWM_PASSWORD=mypassword && npm run gui
 ```
 
 ### Run Modes
@@ -32,11 +62,15 @@ CWM_PASSWORD=your-password npm run gui
 | `npm run demo` | TUI with sample data |
 | `npm test` | Run tests (26 tests) |
 
-### Requirements
+## Prerequisites
 
-- **Node.js 18+** (tested on 22.x)
-- **Windows** — uses ConPTY via node-pty. Linux/macOS untested but should work.
-- C++ build toolchain for node-pty (Visual Studio Build Tools on Windows, `build-essential` on Linux)
+- **Node.js 18+** ([download](https://nodejs.org))
+- **C++ Build Tools** (required by `node-pty` for embedded terminals):
+  - **Windows**: Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with "Desktop development with C++" workload, OR run `npm install -g windows-build-tools`
+  - **macOS**: `xcode-select --install`
+  - **Linux**: `sudo apt install build-essential python3` (Debian/Ubuntu) or equivalent
+
+> **Trouble with `npm install`?** If you see node-gyp errors, you're missing the C++ build tools above. See [Troubleshooting](#troubleshooting) below.
 
 ---
 
@@ -52,19 +86,27 @@ This gives you a single dashboard to organize and run all of it.
 
 ### Why not the existing tools?
 
-There are good tools out there — [Opcode](https://github.com/winfunc/opcode), [Claude Squad](https://github.com/smtg-ai/claude-squad), [CloudCLI](https://github.com/siteboon/claudecodeui), [Crystal](https://github.com/stravu/crystal), the official Claude Code desktop app. I tried them. Here's what pushed me to build this:
+There are good tools out there -- [Opcode](https://github.com/winfunc/opcode), [Claude Squad](https://github.com/smtg-ai/claude-squad), [CloudCLI](https://github.com/siteboon/claudecodeui), [Crystal](https://github.com/stravu/crystal), the official Claude Code desktop app. I tried them. Here's what pushed me to build this:
 
-- **Most require tmux** — Claude Squad, Agent Deck, ccswitch, Agent of Empires are all tmux-based. I'm on Windows. Not an option without WSL.
-- **Desktop apps aren't accessible remotely** — Opcode and Crystal are desktop-only. I wanted to check on sessions from my phone or another machine. This runs in a browser with optional Cloudflare tunnel access.
-- **Worktrees-only isn't enough** — Most competitors organize *exclusively* around git worktrees. I wanted workspaces with attached docs, notes, goals, and kanban boards as the primary mental model — but with worktree support built in for when you need it. Myrlin gives you both: workspace-first organization + "New Feature Session" one-click branch/worktree/session flow when you want git isolation.
-- **No session discovery** — Most tools only manage sessions you create through them. This scans `~/.claude/projects/` and finds every session you've ever run, auto-titles them from the conversation content, and lets you import them.
-- **CloudCLI is closest** but it's more of a remote IDE (file explorer, code editor). I wanted a session *command center* — terminals, workspace docs, resource monitoring, not another editor.
+- **Most require tmux** -- Claude Squad, Agent Deck, ccswitch, Agent of Empires are all tmux-based. I'm on Windows. Not an option without WSL.
+- **Desktop apps aren't accessible remotely** -- Opcode and Crystal are desktop-only. I wanted to check on sessions from my phone or another machine. This runs in a browser with optional Cloudflare tunnel access.
+- **Worktrees-only isn't enough** -- Most competitors organize *exclusively* around git worktrees. I wanted workspaces with attached docs, notes, goals, and kanban boards as the primary mental model -- but with worktree support built in for when you need it. Myrlin gives you both: workspace-first organization + "New Feature Session" one-click branch/worktree/session flow when you want git isolation.
+- **No session discovery** -- Most tools only manage sessions you create through them. This scans `~/.claude/projects/` and finds every session you've ever run, auto-titles them from the conversation content, and lets you import them.
+- **CloudCLI is closest** but it's more of a remote IDE (file explorer, code editor). I wanted a session *command center* -- terminals, workspace docs, resource monitoring, not another editor.
 
 What those tools do better than this: Opcode has 20k stars and cost tracking. Claude Squad supports 5+ AI tools. Agent Deck has MCP socket pooling. Crystal has great git integration. This is alpha and Claude-only (for now). Just being honest.
 
 ---
 
 ## Features
+
+### Project Discovery
+
+- Scans `~/.claude/projects/` and finds all your existing Claude sessions
+- Shows project directory, session count, size, last active
+- Session summaries (parses JSONL to extract what each session was working on)
+- Import sessions into workspaces with one click
+- Auto-titles sessions from conversation content
 
 ### Workspaces & Sessions
 
@@ -74,13 +116,13 @@ What those tools do better than this: Opcode has 20k stars and cost tracking. Cl
 - Group workspaces under umbrella folders
 - Drag-and-drop sessions into terminal panes
 - Session state tracking (running / stopped / error) with PID monitoring
-- State persists to disk — survives crashes and restarts
+- State persists to disk -- survives crashes and restarts
 - Auto-recovery on startup (detects orphaned sessions, restores state)
 
 ### Embedded Terminals
 
 - 4-pane terminal grid (xterm.js + node-pty + WebSocket)
-- Tab groups — named sets of terminal panes ("Research", "Debug"), switchable and persistent
+- Tab groups -- named sets of terminal panes ("Research", "Debug"), switchable and persistent
 - PTY sessions survive page refresh
 - Scrollback replay on reconnect
 - Model selection (Opus, Sonnet, Haiku) and session resume (`--resume`)
@@ -91,29 +133,23 @@ What those tools do better than this: Opcode has 20k stars and cost tracking. Cl
 ![Docs panel with Notes, Goals, Tasks, Roadmap, and Rules](docs/images/docs-panel.png)
 
 - Notes, Goals, Tasks, Rules, and Roadmap sections per workspace
-- Kanban-style feature board (Planned → Active → Review → Done)
+- Kanban-style feature board (Planned -> Active -> Review -> Done)
 - Markdown editor with formatting toolbar
-- AI Insights tab — auto-generated summaries of workspace sessions
+- AI Insights tab -- auto-generated summaries of workspace sessions
 
 ![Feature tracking Kanban board](docs/images/kanban-board.png)
 
-### Project Discovery
-- Scans `~/.claude/projects/` and finds all your existing Claude sessions
-- Shows project directory, session count, size, last active
-- Session summaries (parses JSONL to extract what each session was working on)
-- Import sessions into workspaces with one click
-
 ### Git & Worktree Management
 
-- Full git status per workspace — current branch, dirty/clean, ahead/behind remote
+- Full git status per workspace -- current branch, dirty/clean, ahead/behind remote
 - Branch listing and worktree CRUD via API (`GET/POST/DELETE /api/git/worktrees`, `GET /api/git/branches`)
-- **"New Feature Session"** — right-click a workspace → creates a branch + worktree + Claude session in one click
-- Worktree-aware session launching — sessions opened in a worktree directory use that worktree's branch automatically
+- **"New Feature Session"** -- right-click a workspace -> creates a branch + worktree + Claude session in one click
+- Worktree-aware session launching -- sessions opened in a worktree directory use that worktree's branch automatically
 - Branch badges on session rows show which branch each session is working on
 
 ### Port Detection & Resource Monitoring
 
-- Automatic port detection for running sessions via `getProcessPorts()` — uses PowerShell `Get-NetTCPConnection` on Windows, `lsof` on Unix
+- Automatic port detection for running sessions via `getProcessPorts()` -- uses PowerShell `Get-NetTCPConnection` on Windows, `lsof` on Unix
 - Crawls child process trees to find ports opened by Claude and any tools it spawns
 - Ports shown in the Resources tab alongside CPU and memory per session
 - System overview (CPU, RAM, uptime)
@@ -122,7 +158,7 @@ What those tools do better than this: Opcode has 20k stars and cost tracking. Cl
 
 ### Themes
 
-![All 4 Catppuccin themes — Mocha, Macchiato, Frappe, and Latte](docs/images/theme-showcase.png)
+![All 4 Catppuccin themes -- Mocha, Macchiato, Frappe, and Latte](docs/images/theme-showcase.png)
 
 4 Catppuccin themes: Mocha (dark), Macchiato, Frappe, and Latte (light). Toggle from the header.
 
@@ -136,6 +172,7 @@ What those tools do better than this: Opcode has 20k stars and cost tracking. Cl
 
 You can expose your local instance with a Cloudflare tunnel:
 
+**Bash/zsh:**
 ```bash
 # Start the server
 npm run gui
@@ -144,11 +181,20 @@ npm run gui
 cloudflared tunnel --url http://localhost:3456
 ```
 
-Cloudflared gives you a public URL. Open it from any device, log in with your password. All WebSocket terminal connections, SSE streams, and REST API calls route through the tunnel — full functionality from anywhere.
+**PowerShell:**
+```powershell
+# Start the server
+npm run gui
+
+# In another terminal
+cloudflared tunnel --url http://localhost:3456
+```
+
+Cloudflared gives you a public URL. Open it from any device, log in with your password. All WebSocket terminal connections, SSE streams, and REST API calls route through the tunnel -- full functionality from anywhere.
 
 For a stable URL (e.g., `yourname.myrlin.dev`), see the [Cloudflare tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) on named tunnels.
 
-Combined with automatic port detection, you can see which ports your Claude sessions have opened (dev servers, databases, etc.) directly from the Resources tab — useful for knowing what's running remotely.
+Combined with automatic port detection, you can see which ports your Claude sessions have opened (dev servers, databases, etc.) directly from the Resources tab -- useful for knowing what's running remotely.
 
 ---
 
@@ -156,17 +202,17 @@ Combined with automatic port detection, you can see which ports your Claude sess
 
 ```
 Browser (vanilla JS SPA)
-  │
-  ├── REST API ──────── Express server
-  │                       ├── State store (JSON + EventEmitter)
-  │                       ├── Session manager (launch/stop/restart)
-  │                       ├── Resource monitoring (CPU, RAM, per-PID)
-  │                       └── Workspace groups, discovery, docs
-  │
-  ├── SSE ───────────── Real-time updates (store events → clients)
-  │
-  └── WebSocket ─────── Terminal I/O (binary frames)
-                           └── node-pty → ConPTY / PTY
+  |
+  |-- REST API ---------- Express server
+  |                         |-- State store (JSON + EventEmitter)
+  |                         |-- Session manager (launch/stop/restart)
+  |                         |-- Resource monitoring (CPU, RAM, per-PID)
+  |                         +-- Workspace groups, discovery, docs
+  |
+  |-- SSE --------------- Real-time updates (store events -> clients)
+  |
+  +-- WebSocket --------- Terminal I/O (binary frames)
+                             +-- node-pty -> ConPTY / PTY
 ```
 
 No React, no build step. Vanilla JS SPA, Express backend.
@@ -175,30 +221,30 @@ No React, no build step. Vanilla JS SPA, Express backend.
 
 ```
 src/
-├── state/
-│   ├── store.js              # Core state (JSON persistence + EventEmitter)
-│   └── docs-manager.js       # Per-workspace markdown docs
-├── core/
-│   ├── session-manager.js    # Launch/stop/restart processes
-│   ├── workspace-manager.js  # Workspace CRUD
-│   ├── process-tracker.js    # PID monitoring
-│   ├── recovery.js           # Auto-recovery on startup
-│   └── notifications.js      # Event-based notifications
-├── web/
-│   ├── server.js             # Express API + SSE + resources
-│   ├── auth.js               # Token auth + rate limiting
-│   ├── backup.js             # Frontend backup/restore
-│   ├── pty-manager.js        # PTY session lifecycle
-│   ├── pty-server.js         # WebSocket server for terminal I/O
-│   └── public/
-│       ├── index.html        # SPA shell
-│       ├── app.js            # Frontend application
-│       ├── styles.css        # Catppuccin Mocha theme
-│       └── terminal.js       # TerminalPane (xterm.js + WebSocket)
-├── ui/                       # TUI mode (blessed)
-├── index.js                  # TUI entry point
-├── demo.js                   # TUI demo
-└── gui.js                    # GUI entry point
+|-- state/
+|   |-- store.js              # Core state (JSON persistence + EventEmitter)
+|   +-- docs-manager.js       # Per-workspace markdown docs
+|-- core/
+|   |-- session-manager.js    # Launch/stop/restart processes
+|   |-- workspace-manager.js  # Workspace CRUD
+|   |-- process-tracker.js    # PID monitoring
+|   |-- recovery.js           # Auto-recovery on startup
+|   +-- notifications.js      # Event-based notifications
+|-- web/
+|   |-- server.js             # Express API + SSE + resources
+|   |-- auth.js               # Token auth + rate limiting
+|   |-- backup.js             # Frontend backup/restore
+|   |-- pty-manager.js        # PTY session lifecycle
+|   |-- pty-server.js         # WebSocket server for terminal I/O
+|   +-- public/
+|       |-- index.html        # SPA shell
+|       |-- app.js            # Frontend application
+|       |-- styles.css        # Catppuccin Mocha theme
+|       +-- terminal.js       # TerminalPane (xterm.js + WebSocket)
+|-- ui/                       # TUI mode (blessed)
+|-- index.js                  # TUI entry point
+|-- demo.js                   # TUI demo
++-- gui.js                    # GUI entry point
 ```
 
 ---
@@ -209,14 +255,26 @@ src/
 
 Loaded in order:
 1. `CWM_PASSWORD` environment variable
-2. `state/config.json` → `{ "password": "..." }`
+2. `state/config.json` -> `{ "password": "..." }`
 3. Auto-generated (printed to console, saved to config)
 
 ### Port
 
 Default `3456`. Override with `PORT`:
+
+**Bash/zsh:**
 ```bash
 PORT=8080 npm run gui
+```
+
+**PowerShell:**
+```powershell
+$env:PORT="8080"; npm run gui
+```
+
+**cmd.exe:**
+```cmd
+set PORT=8080 && npm run gui
 ```
 
 ### Theme
@@ -238,6 +296,20 @@ PORT=8080 npm run gui
 
 ---
 
+## Troubleshooting
+
+### `npm install` fails with node-gyp errors
+This means `node-pty` can't compile. Install the C++ build tools listed in [Prerequisites](#prerequisites).
+
+**Windows quick fix:**
+```powershell
+npm install -g windows-build-tools
+```
+
+**Still stuck?** Open an issue with your full error output and OS version.
+
+---
+
 ## Roadmap
 
 - Multi-provider support (Codex, Cursor, Aider)
@@ -256,13 +328,13 @@ PORT=8080 npm run gui
 
 ## License
 
-**AGPL-3.0** — Use, modify, self-host freely. If you run a modified version as a public service, you must publish source. See [LICENSE](LICENSE).
+**AGPL-3.0** -- Use, modify, self-host freely. If you run a modified version as a public service, you must publish source. See [LICENSE](LICENSE).
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome. No build step — clone, `npm install`, hack.
+Issues and PRs welcome. No build step -- clone, `npm install`, hack.
 
 ```bash
 npm test        # 26 tests

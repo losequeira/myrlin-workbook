@@ -1060,14 +1060,20 @@ app.post('/api/sessions/:id/auto-title', requireAuth, (req, res) => {
     // Strategy: Read head (first exchange) + tail (recent activity) for full context.
     const headSize = Math.min(30 * 1024, fileSize);
     const headBuf = Buffer.alloc(headSize);
-    const fd = fs.openSync(jsonlPath, 'r');
-    const headBytesRead = fs.readSync(fd, headBuf, 0, headSize, 0);
-
+    // Wrap fd operations in try-finally to prevent file descriptor leak if readSync or Buffer.alloc throws
+    let fd;
+    let headBytesRead;
+    let tailBytesRead;
     const tailSize = Math.min(50 * 1024, fileSize);
     const tailOffset = Math.max(0, fileSize - tailSize);
     const tailBuf = Buffer.alloc(tailSize);
-    const tailBytesRead = fs.readSync(fd, tailBuf, 0, tailSize, tailOffset);
-    fs.closeSync(fd);
+    try {
+      fd = fs.openSync(jsonlPath, 'r');
+      headBytesRead = fs.readSync(fd, headBuf, 0, headSize, 0);
+      tailBytesRead = fs.readSync(fd, tailBuf, 0, tailSize, tailOffset);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
 
     // Parse head messages (first user message + first assistant response)
     const headContent = headBuf.toString('utf-8', 0, headBytesRead);
@@ -2277,7 +2283,26 @@ app.get('/api/sessions/:id/subagents', requireAuth, (req, res) => {
  * @returns {string} Summary text
  */
 function generateSessionSummary(jsonlPath) {
-  const content = fs.readFileSync(jsonlPath, 'utf-8');
+  // Read only the tail (last 200KB) for summary generation to avoid blocking
+  // the event loop on large JSONL files. The summary only needs recent context.
+  const stat = fs.statSync(jsonlPath);
+  const maxRead = 200 * 1024; // 200KB cap
+  let content;
+  if (stat.size <= maxRead) {
+    content = fs.readFileSync(jsonlPath, 'utf-8');
+  } else {
+    const fd = fs.openSync(jsonlPath, 'r');
+    try {
+      const buf = Buffer.alloc(maxRead);
+      fs.readSync(fd, buf, 0, maxRead, stat.size - maxRead);
+      content = buf.toString('utf-8');
+      // Find the first complete line (partial line from seeking into the middle)
+      const firstNewline = content.indexOf('\n');
+      if (firstNewline > 0) content = content.slice(firstNewline + 1);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
   const lines = content.split('\n').filter(l => l.trim());
 
   let firstUserMsg = null;
@@ -2610,6 +2635,11 @@ app.get('/api/events', (req, res) => {
   req.on('close', () => {
     sseClients.delete(res);
   });
+
+  // Also handle request errors (e.g. aborted connections) to prevent stale client references
+  req.on('error', () => {
+    sseClients.delete(res);
+  });
 });
 
 /**
@@ -2623,6 +2653,11 @@ function broadcastSSE(eventType, data) {
   const message = `data: ${payload}\n\n`;
 
   for (const client of sseClients) {
+    // Skip and remove clients whose writable stream has already ended
+    if (client.writableEnded) {
+      sseClients.delete(client);
+      continue;
+    }
     try {
       client.write(message);
     } catch (_) {

@@ -541,9 +541,13 @@ class CWMApp {
       });
     });
 
-    // Docs/Board tab switching
-    document.querySelectorAll('.docs-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
+    // Docs/Board tab switching — use event delegation on parent to avoid listener leaks
+    // (Adding listeners to each .docs-tab individually would accumulate if tabs are ever re-rendered)
+    const docsTabBar = document.querySelector('.docs-tabs');
+    if (docsTabBar) {
+      docsTabBar.addEventListener('click', (e) => {
+        const tab = e.target.closest('.docs-tab');
+        if (!tab) return;
         document.querySelectorAll('.docs-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         const view = tab.dataset.tab;
@@ -556,7 +560,7 @@ class CWMApp {
         if (this.els.docsSaveBtn) this.els.docsSaveBtn.hidden = true;
         if (view === 'board') this.loadFeatureBoard();
       });
-    });
+    }
 
     // Board add button
     if (this.els.boardAddBtn) {
@@ -865,6 +869,16 @@ class CWMApp {
     }
     this.state.token = null;
     localStorage.removeItem('cwm_token');
+    // Clean up conflict check interval to prevent background polling after logout
+    if (this._conflictCheckInterval) {
+      clearInterval(this._conflictCheckInterval);
+      this._conflictCheckInterval = null;
+    }
+    // Clean up SSE retry timeout to prevent reconnection attempts after logout
+    if (this.sseRetryTimeout) {
+      clearTimeout(this.sseRetryTimeout);
+      this.sseRetryTimeout = null;
+    }
     this.disconnectSSE();
     this.showLogin();
   }
@@ -978,6 +992,17 @@ class CWMApp {
       } else {
         // 'all' mode — reuse the full list we already fetched
         this.state.sessions = this.state.allSessions;
+      }
+
+      // Clear stale selectedSession if it no longer exists in the loaded session list
+      // (e.g. deleted by another client or via SSE session:deleted event)
+      if (this.state.selectedSession) {
+        const stillExists = this.state.sessions.some(s => s.id === this.state.selectedSession.id)
+          || (this.state.allSessions && this.state.allSessions.some(s => s.id === this.state.selectedSession.id));
+        if (!stillExists) {
+          this.state.selectedSession = null;
+          this.renderSessionDetail();
+        }
       }
 
       this.renderSessions();
@@ -2960,8 +2985,12 @@ class CWMApp {
       this.els.modalConfirmBtn.className = `btn ${confirmClass}`;
       this.els.modalCancelBtn.textContent = 'Cancel';
 
-      // Rebind confirm
+      // Re-enable confirm button (may have been disabled by previous modal interaction)
+      this.els.modalConfirmBtn.disabled = false;
+
+      // Rebind confirm — disable button immediately to prevent double-click
       const confirmHandler = () => {
+        this.els.modalConfirmBtn.disabled = true;
         this.els.modalConfirmBtn.removeEventListener('click', confirmHandler);
         this.closeModal(true);
       };
@@ -3069,8 +3098,12 @@ class CWMApp {
         });
       });
 
-      // Confirm handler
+      // Re-enable confirm button (may have been disabled by previous modal interaction)
+      this.els.modalConfirmBtn.disabled = false;
+
+      // Confirm handler — disable button immediately to prevent double-click
       const confirmHandler = () => {
+        this.els.modalConfirmBtn.disabled = true;
         this.els.modalConfirmBtn.removeEventListener('click', confirmHandler);
         const result = {};
         fields.forEach(f => {
@@ -3085,11 +3118,13 @@ class CWMApp {
             if (el) result[f.key] = el.value;
           }
         });
-        // Validate required
+        // Validate required — re-enable button if validation fails so user can try again
         for (const f of fields) {
           if (f.required && !result[f.key]) {
             const el = document.getElementById(`modal-field-${f.key}`);
             if (el && el.focus) el.focus();
+            this.els.modalConfirmBtn.disabled = false;
+            this.els.modalConfirmBtn.addEventListener('click', confirmHandler);
             return;
           }
         }
