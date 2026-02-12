@@ -5935,6 +5935,17 @@ class CWMApp {
       });
     };
 
+    // Shared close-delay timer — gives the mouse time to cross the gap
+    // between the parent wrapper and the fixed-position submenu
+    let submenuCloseTimer = null;
+    const cancelClose = () => { clearTimeout(submenuCloseTimer); submenuCloseTimer = null; };
+    const scheduleClose = (subEl) => {
+      cancelClose();
+      submenuCloseTimer = setTimeout(() => {
+        subEl.classList.remove('ctx-submenu-visible');
+      }, 120); // 120ms grace period to cross the gap
+    };
+
     // Bind click handlers for regular items
     container.querySelectorAll('.ctx-item-wrapper').forEach(wrapper => {
       const idx = parseInt(wrapper.dataset.idx);
@@ -5947,15 +5958,19 @@ class CWMApp {
 
         // Show submenu on hover (desktop) — uses fixed positioning to escape overflow
         wrapper.addEventListener('mouseenter', () => {
+          cancelClose(); // cancel any pending close from a prior submenu
           hideAllSubmenus();
           if (subEl) positionSubmenu(wrapper, subEl);
         });
-        wrapper.addEventListener('mouseleave', (e) => {
-          // Only hide if mouse didn't move into the submenu itself
-          if (subEl && !subEl.contains(e.relatedTarget) && !wrapper.contains(e.relatedTarget)) {
-            subEl.classList.remove('ctx-submenu-visible');
-          }
+        wrapper.addEventListener('mouseleave', () => {
+          if (subEl) scheduleClose(subEl);
         });
+
+        // Keep submenu open while mouse is inside it
+        if (subEl) {
+          subEl.addEventListener('mouseenter', cancelClose);
+          subEl.addEventListener('mouseleave', () => scheduleClose(subEl));
+        }
 
         // Click on parent toggles submenu (for touch / accessibility)
         if (parentBtn) {
@@ -5989,7 +6004,7 @@ class CWMApp {
           item.action();
         });
         // When hovering a non-submenu item, hide any open submenus
-        wrapper.addEventListener('mouseenter', hideAllSubmenus);
+        wrapper.addEventListener('mouseenter', () => { cancelClose(); hideAllSubmenus(); });
       }
     });
 
@@ -6757,7 +6772,8 @@ class CWMApp {
         ctxItems.push({ type: 'sep' });
         ctxItems.push(
           { label: 'Delete', danger: true, action: () => this.deleteTerminalGroup(groupId) },
-        ], e.clientX, e.clientY);
+        );
+        this.showContextMenu(ctxItems, e.clientX, e.clientY);
       });
     });
   }
