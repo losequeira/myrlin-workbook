@@ -3750,11 +3750,9 @@ textarea.input {
 .terminal-groups-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
   padding: 4px 12px;
   background: var(--mantle);
   border-bottom: 1px solid var(--surface0);
-  overflow-x: auto;
   flex-shrink: 0;
 }
 
@@ -3764,6 +3762,7 @@ textarea.input {
   flex: 1;
   overflow-x: auto;
   scrollbar-width: none;
+  align-items: center;
 }
 
 .terminal-groups-tabs::-webkit-scrollbar {
@@ -3818,7 +3817,25 @@ textarea.input {
 }
 
 .terminal-groups-add {
+  position: sticky;
+  right: 0;
   flex-shrink: 0;
+  padding: 4px 6px;
+  background: var(--mantle);
+  border: none;
+  border-radius: 6px;
+  color: var(--overlay0);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  margin-left: 4px;
+}
+
+.terminal-groups-add:hover {
+  color: var(--text);
+  background: var(--surface0);
 }
 
 /* ═══════════════════════════════════════════════════════════ */

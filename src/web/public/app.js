@@ -318,7 +318,6 @@ class CWMApp {
       // Terminal Tab Groups
       terminalGroupsBar: document.getElementById('terminal-groups-bar'),
       terminalGroupsTabs: document.getElementById('terminal-groups-tabs'),
-      terminalGroupsAdd: document.getElementById('terminal-groups-add'),
 
       // Notes Editor
       notesEditorOverlay: document.getElementById('notes-editor-overlay'),
@@ -6718,11 +6717,6 @@ class CWMApp {
     this._activeGroupId = null;
     this._layoutSaveTimer = null;
 
-    // Bind events
-    if (this.els.terminalGroupsAdd) {
-      this.els.terminalGroupsAdd.addEventListener('click', () => this.createTerminalGroup());
-    }
-
     // Load saved layout
     this.loadTerminalLayout();
   }
@@ -6759,7 +6753,7 @@ class CWMApp {
   renderTerminalGroupTabs() {
     if (!this.els.terminalGroupsTabs) return;
 
-    const html = this._tabGroups.map(g => {
+    let html = this._tabGroups.map(g => {
       const isActive = g.id === this._activeGroupId;
       const paneCount = g.panes ? g.panes.length : 0;
       const hasActive = g.panes && g.panes.some(p => {
@@ -6773,7 +6767,18 @@ class CWMApp {
       </button>`;
     }).join('');
 
+    // Sticky "+" button at the end — stays pinned when tabs overflow
+    html += `<button class="terminal-groups-add" id="terminal-groups-add" title="New tab group">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>`;
+
     this.els.terminalGroupsTabs.innerHTML = html;
+
+    // Bind the "+" button
+    const addBtn = this.els.terminalGroupsTabs.querySelector('.terminal-groups-add');
+    if (addBtn) addBtn.addEventListener('click', () => this.createTerminalGroup());
 
     // Bind tab click + drag events
     this.els.terminalGroupsTabs.querySelectorAll('.terminal-group-tab').forEach(tab => {
