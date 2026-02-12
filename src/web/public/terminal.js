@@ -714,12 +714,14 @@ class TerminalPane {
       else if (tool === 'WebFetch' || tool === 'WebSearch') newActivity = { type: 'searching', detail: 'Web search' };
     }
 
-    // Thinking/streaming indicator — Claude outputs text without tool headers
-    if (!newActivity && /\S/.test(clean) && clean.length > 10) {
-      // If we see substantial text without tool headers, Claude is thinking/responding
-      if (!this._currentActivity || this._currentActivity.type === 'idle') {
-        newActivity = { type: 'thinking', detail: 'Generating response' };
-      }
+    // Thinking/streaming indicator — detect Claude's actual response marker.
+    // Claude Code prefixes all output (responses + tool calls) with ⏺.
+    // Tool calls are already caught above, so a ⏺ in the CURRENT chunk
+    // without a tool match means Claude is streaming a text response.
+    // Only check the current data chunk (not rolling buffer) to avoid
+    // stale markers from previous tool calls triggering false positives.
+    if (!newActivity && /⏺/.test(clean)) {
+      newActivity = { type: 'thinking', detail: 'Generating response' };
     }
 
     if (newActivity && (!this._currentActivity || this._currentActivity.type !== newActivity.type || this._currentActivity.detail !== newActivity.detail)) {
