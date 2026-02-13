@@ -295,10 +295,19 @@ class TerminalPane {
       return;
     }
 
+    const isReconnect = this._gotFirstData; // true if we've received data before
+
     // Close any stale WebSocket before creating a new one
     if (this.ws) {
       try { this.ws.onclose = null; this.ws.onerror = null; this.ws.close(); } catch (_) {}
       this.ws = null;
+    }
+
+    // On reconnect, clear the terminal before the server replays scrollback.
+    // Without this, the replayed scrollback appears on top of existing content,
+    // causing duplicated output visible when scrolling up.
+    if (isReconnect && this.term) {
+      this.term.clear();
     }
 
     const token = localStorage.getItem('cwm_token');
