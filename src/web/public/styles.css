@@ -3520,6 +3520,7 @@ textarea.input {
 .terminal-grid[data-panes="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
 .terminal-grid[data-panes="3"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 .terminal-pane {
+  position: relative;
   display: flex; flex-direction: column;
   background: var(--base); overflow: hidden;
   min-height: 0;
@@ -3581,10 +3582,22 @@ textarea.input {
 }
 
 .terminal-pane-close { width: 20px; height: 20px; padding: 0; }
-/* Upload image button — reveals on hover, same pattern as close button */
-.terminal-pane-upload { width: 20px; height: 20px; padding: 0; opacity: 0; transition: opacity 0.15s; }
+/* Upload image button — floating bottom-right of terminal pane */
+.terminal-pane-upload {
+  position: absolute; bottom: 12px; right: 12px; z-index: 5;
+  width: 32px; height: 32px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface0); border: 1px solid var(--surface1);
+  border-radius: 8px; color: var(--subtext0); cursor: pointer;
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+}
 .terminal-pane:not(.terminal-pane-empty):hover .terminal-pane-upload,
-.terminal-pane-upload:focus-visible { opacity: 1; }
+.terminal-pane-upload:focus-visible { opacity: 0.7; }
+.terminal-pane-upload:hover { opacity: 1 !important; background: var(--surface1); color: var(--text); }
+/* On mobile, hide floating upload button — mobile toolbar has its own upload btn */
+@media (max-width: 768px) {
+  .terminal-pane-upload { display: none; }
+}
 /* Image file drag indicator — blue dashed (vs mauve for sessions) */
 .terminal-pane.image-drag-over { position: relative; }
 .terminal-pane.image-drag-over .terminal-container {
