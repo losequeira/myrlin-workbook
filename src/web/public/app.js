@@ -1294,7 +1294,7 @@ class CWMApp {
       });
     }
 
-    const result = await this.showPromptModal({
+    const resultPromise = this.showPromptModal({
       title: 'New Session',
       fields,
       confirmText: 'Create',
@@ -1321,6 +1321,9 @@ class CWMApp {
         this.showToast(`Template "${tpl.name}" applied`, 'success');
       },
     });
+    // Inject browse button next to Working Directory field after modal renders
+    requestAnimationFrame(() => this._injectBrowseButton('modal-field-workingDir'));
+    const result = await resultPromise;
 
     if (!result) return;
 
@@ -1400,7 +1403,7 @@ class CWMApp {
       || null;
     if (!session) return;
 
-    const result = await this.showPromptModal({
+    const resultPromise = this.showPromptModal({
       title: 'Edit Session',
       fields: [
         { key: 'name', label: 'Name', value: session.name, required: true },
@@ -1410,6 +1413,9 @@ class CWMApp {
       confirmText: 'Save',
       confirmClass: 'btn-primary',
     });
+    // Inject browse button next to Working Directory field after modal renders
+    requestAnimationFrame(() => this._injectBrowseButton('modal-field-workingDir'));
+    const result = await resultPromise;
 
     if (!result) return;
 
@@ -3212,6 +3218,149 @@ class CWMApp {
       this.modalResolve(result);
       this.modalResolve = null;
     }
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FOLDER BROWSER
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Show a folder browser modal for selecting a directory path.
+   * Stacks on top of the generic modal (z-index 10003 vs 10002).
+   * @param {string} [initialPath=''] - Starting directory path
+   * @returns {Promise<string|null>} Selected directory path or null
+   */
+  showFolderBrowser(initialPath = '') {
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('folder-browser-overlay');
+      const list = document.getElementById('folder-browser-list');
+      const breadcrumb = document.getElementById('folder-browser-breadcrumb');
+      const pathDisplay = document.getElementById('folder-browser-path');
+      const selectBtn = document.getElementById('folder-browser-select');
+      const cancelBtn = document.getElementById('folder-browser-cancel');
+      const closeBtn = document.getElementById('folder-browser-close');
+
+      let currentPath = initialPath || '';
+      let resolved = false;
+
+      const close = (result) => {
+        if (resolved) return;
+        resolved = true;
+        overlay.hidden = true;
+        selectBtn.removeEventListener('click', onSelect);
+        cancelBtn.removeEventListener('click', onCancel);
+        closeBtn.removeEventListener('click', onCancel);
+        overlay.removeEventListener('click', onOverlayClick);
+        document.removeEventListener('keydown', onKeyDown);
+        resolve(result);
+      };
+
+      const onSelect = () => close(currentPath);
+      const onCancel = () => close(null);
+      const onOverlayClick = (e) => { if (e.target === overlay) close(null); };
+      const onKeyDown = (e) => { if (e.key === 'Escape') close(null); };
+
+      /**
+       * Navigate to a directory path — fetches contents and renders.
+       * @param {string} dirPath - Directory path to navigate to
+       */
+      const navigateTo = async (dirPath) => {
+        currentPath = dirPath;
+        pathDisplay.textContent = dirPath || 'Loading...';
+        list.innerHTML = '<div class="folder-browser-loading">Loading...</div>';
+
+        try {
+          const data = await this.api('GET', '/api/browse?path=' + encodeURIComponent(dirPath));
+          currentPath = data.currentPath;
+          pathDisplay.textContent = currentPath;
+
+          // Render breadcrumb — each path segment is clickable
+          const normalized = currentPath.replace(/\\/g, '/');
+          const segments = normalized.split('/').filter(Boolean);
+          let crumbHtml = '';
+          for (let i = 0; i < segments.length; i++) {
+            const partialPath = segments.slice(0, i + 1).join('/');
+            // On Windows, first segment is drive letter — needs trailing backslash
+            const clickPath = i === 0 && partialPath.endsWith(':') ? partialPath + '\\' : partialPath;
+            const isLast = i === segments.length - 1;
+            if (i > 0) crumbHtml += '<span class="folder-browser-sep">&#9656;</span>';
+            crumbHtml += `<span class="folder-browser-crumb${isLast ? ' active' : ''}" data-path="${this.escapeHtml(clickPath)}">${this.escapeHtml(segments[i])}</span>`;
+          }
+          breadcrumb.innerHTML = crumbHtml;
+          breadcrumb.querySelectorAll('.folder-browser-crumb').forEach(crumb => {
+            crumb.addEventListener('click', () => navigateTo(crumb.dataset.path));
+          });
+
+          // Render directory list
+          let listHtml = '';
+          if (data.parent) {
+            listHtml += `<div class="folder-browser-item folder-browser-item-parent" data-path="${this.escapeHtml(data.parent)}">
+              <span class="folder-browser-item-icon">&#11168;</span>
+              <span class="folder-browser-item-name">..</span>
+            </div>`;
+          }
+          if (data.entries.length === 0) {
+            listHtml += '<div class="folder-browser-empty">No subdirectories</div>';
+          }
+          for (const entry of data.entries) {
+            listHtml += `<div class="folder-browser-item" data-path="${this.escapeHtml(entry.path)}">
+              <span class="folder-browser-item-icon">&#128193;</span>
+              <span class="folder-browser-item-name">${this.escapeHtml(entry.name)}</span>
+            </div>`;
+          }
+          list.innerHTML = listHtml;
+
+          // Single click navigates into the directory
+          list.querySelectorAll('.folder-browser-item').forEach(item => {
+            item.addEventListener('click', () => navigateTo(item.dataset.path));
+          });
+        } catch (err) {
+          list.innerHTML = `<div class="folder-browser-empty" style="color:var(--red)">Error: ${this.escapeHtml(err.message || 'Failed to browse')}</div>`;
+        }
+      };
+
+      // Wire up event listeners
+      selectBtn.addEventListener('click', onSelect);
+      cancelBtn.addEventListener('click', onCancel);
+      closeBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('click', onOverlayClick);
+      document.addEventListener('keydown', onKeyDown);
+
+      // Show overlay and navigate to initial path
+      overlay.hidden = false;
+      navigateTo(currentPath);
+    });
+  }
+
+  /**
+   * Inject a "Browse" button next to a workingDir input in the current modal.
+   * Call via requestAnimationFrame after showPromptModal() to ensure DOM is ready.
+   * @param {string} [fieldId='modal-field-workingDir'] - Input element ID
+   */
+  _injectBrowseButton(fieldId = 'modal-field-workingDir') {
+    const dirInput = document.getElementById(fieldId);
+    if (!dirInput) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:flex;gap:8px;align-items:stretch';
+    dirInput.parentNode.insertBefore(wrapper, dirInput);
+    wrapper.appendChild(dirInput);
+    dirInput.style.flex = '1';
+
+    const browseBtn = document.createElement('button');
+    browseBtn.type = 'button';
+    browseBtn.className = 'btn btn-ghost btn-sm';
+    browseBtn.textContent = 'Browse';
+    browseBtn.style.cssText = 'white-space:nowrap;flex-shrink:0;height:auto';
+    browseBtn.addEventListener('click', async () => {
+      const selected = await this.showFolderBrowser(dirInput.value || '');
+      if (selected) {
+        dirInput.value = selected;
+        dirInput.focus();
+      }
+    });
+    wrapper.appendChild(browseBtn);
   }
 
 

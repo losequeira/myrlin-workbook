@@ -3958,6 +3958,63 @@ app.get('/api/workspaces/:id/conflicts', requireAuth, (req, res) => {
   });
 });
 
+/**
+ * GET /api/browse
+ * Lists directories at a given path for the folder browser UI.
+ * Returns only directories (not files) since session creation needs a directory.
+ * Protected by auth.
+ *
+ * @query {string} [path] - Directory to list (default: user's home directory)
+ * @returns {{ currentPath: string, parent: string|null, entries: Array<{name: string, path: string}> }}
+ */
+app.get('/api/browse', requireAuth, (req, res) => {
+  const os = require('os');
+  const fs = require('fs');
+
+  let targetPath = req.query.path || os.homedir();
+  targetPath = path.resolve(targetPath);
+
+  // Validate path exists and is a directory
+  try {
+    const stat = fs.statSync(targetPath);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ error: 'Path is not a directory' });
+    }
+  } catch (err) {
+    return res.status(400).json({ error: 'Path does not exist or is not accessible' });
+  }
+
+  // Compute parent directory (null at filesystem root)
+  const parent = path.dirname(targetPath);
+  const hasParent = parent !== targetPath;
+
+  // Read directory entries, filter to directories only
+  const entries = [];
+  try {
+    const items = fs.readdirSync(targetPath, { withFileTypes: true });
+    for (const item of items) {
+      // Skip hidden and system directories
+      if (item.name.startsWith('.') || item.name === '$RECYCLE.BIN' || item.name === 'System Volume Information') {
+        continue;
+      }
+      try {
+        if (item.isDirectory()) {
+          entries.push({ name: item.name, path: path.join(targetPath, item.name) });
+        }
+      } catch (_) {
+        // Skip entries we can't stat (permission denied)
+      }
+    }
+  } catch (err) {
+    return res.status(403).json({ error: 'Cannot read directory: ' + err.message });
+  }
+
+  // Sort alphabetically, case-insensitive
+  entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+  res.json({ currentPath: targetPath, parent: hasParent ? parent : null, entries });
+});
+
 // ──────────────────────────────────────────────────────────
 //  SERVER START
 // ──────────────────────────────────────────────────────────

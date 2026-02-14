@@ -33,6 +33,7 @@ class PtySession {
     this.alive = true;
     this.exitCode = null;
     this.pid = ptyProcess.pid;
+    this.pingInterval = null;    // Keepalive ping interval ID
   }
 
   /**
@@ -311,6 +312,36 @@ class PtySessionManager {
     });
 
     console.log(`[PTY] Client attached to session ${sessionId} (${session.clients.size} clients)`);
+
+    // ── Ping/pong keepalive ──────────────────────────────────
+    // Browser WebSockets auto-respond to pings with pongs (RFC 6455).
+    // Without keepalive, idle connections get dropped by OS/firewalls,
+    // causing terminal flashing on reconnect.
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
+    // Start a shared ping interval per session (30s cycle)
+    if (!session.pingInterval) {
+      session.pingInterval = setInterval(() => {
+        for (const client of session.clients) {
+          if (client.isAlive === false) {
+            console.log(`[PTY] Client unresponsive, terminating (session ${sessionId})`);
+            client.terminate();
+            session.clients.delete(client);
+            continue;
+          }
+          client.isAlive = false;
+          try { client.ping(); } catch (_) {
+            session.clients.delete(client);
+          }
+        }
+        // Self-clear when all clients disconnect (PTY stays alive for reconnect)
+        if (session.clients.size === 0) {
+          clearInterval(session.pingInterval);
+          session.pingInterval = null;
+        }
+      }, 30000);
+    }
   }
 
   /**
@@ -329,6 +360,12 @@ class PtySessionManager {
       } catch (_) {}
     }
     session.clients.clear();
+
+    // Clear keepalive ping interval
+    if (session.pingInterval) {
+      clearInterval(session.pingInterval);
+      session.pingInterval = null;
+    }
 
     // Kill the PTY process
     if (session.alive) {

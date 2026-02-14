@@ -865,6 +865,29 @@
   </div>
 
   <!-- ═══════════════════════════════════════════ -->
+  <!-- FOLDER BROWSER MODAL                        -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="folder-browser-overlay" id="folder-browser-overlay" hidden>
+    <div class="folder-browser" role="dialog" aria-modal="true" aria-label="Browse Folders">
+      <div class="folder-browser-header">
+        <span class="folder-browser-title">Select Folder</span>
+        <button class="btn btn-ghost btn-icon btn-sm" id="folder-browser-close" aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="folder-browser-breadcrumb" id="folder-browser-breadcrumb"></div>
+      <div class="folder-browser-list" id="folder-browser-list"></div>
+      <div class="folder-browser-footer">
+        <span class="folder-browser-path-display" id="folder-browser-path"></span>
+        <div class="folder-browser-actions">
+          <button class="btn btn-ghost btn-sm" id="folder-browser-cancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="folder-browser-select">Select This Folder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
   <!-- UPDATE MODAL                                -->
   <!-- ═══════════════════════════════════════════ -->
   <div class="modal-overlay" id="update-overlay" hidden>

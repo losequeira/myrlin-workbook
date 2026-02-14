@@ -299,15 +299,15 @@ class TerminalPane {
 
     // Close any stale WebSocket before creating a new one
     if (this.ws) {
-      try { this.ws.onclose = null; this.ws.onerror = null; this.ws.close(); } catch (_) {}
+      try { this.ws.onmessage = null; this.ws.onclose = null; this.ws.onerror = null; this.ws.close(); } catch (_) {}
       this.ws = null;
     }
 
-    // On reconnect, clear the terminal before the server replays scrollback.
-    // Without this, the replayed scrollback appears on top of existing content,
-    // causing duplicated output visible when scrolling up.
+    // On reconnect, fully reset the terminal before the server replays scrollback.
+    // reset() clears viewport, scrollback buffer, cursor, and all terminal state.
+    // Without this, the replayed scrollback appears on top of existing content.
     if (isReconnect && this.term) {
-      this.term.clear();
+      this.term.reset();
     }
 
     const token = localStorage.getItem('cwm_token');
@@ -781,7 +781,7 @@ class TerminalPane {
     clearTimeout(this._idleCheckTimer);
     if (this._touchScrollCleanup) this._touchScrollCleanup();
     if (this._resizeObserver) this._resizeObserver.disconnect();
-    if (this.ws) { this.ws.onclose = null; this.ws.close(); }
+    if (this.ws) { this.ws.onmessage = null; this.ws.onclose = null; this.ws.close(); }
     if (this.term) this.term.dispose();
     this.term = null;
     this.ws = null;
