@@ -6934,6 +6934,7 @@ class CWMApp {
   initTerminalGroups() {
     // Load layout from server
     this._tabGroups = [];
+    this._tabFolders = []; // Tab group folders: { id, name, color, collapsed }
     this._activeGroupId = null;
     this._layoutSaveTimer = null;
 
@@ -6946,14 +6947,17 @@ class CWMApp {
       const layout = await this.api('GET', '/api/layout');
       if (layout && layout.tabGroups && layout.tabGroups.length > 0) {
         this._tabGroups = layout.tabGroups;
+        this._tabFolders = layout.tabFolders || [];
         this._activeGroupId = layout.activeGroupId || this._tabGroups[0].id;
       } else {
         // Create default group
         this._tabGroups = [{ id: 'tg_default', name: 'Main', panes: [] }];
+        this._tabFolders = [];
         this._activeGroupId = 'tg_default';
       }
     } catch (_) {
       this._tabGroups = [{ id: 'tg_default', name: 'Main', panes: [] }];
+      this._tabFolders = [];
       this._activeGroupId = 'tg_default';
     }
     this.renderTerminalGroupTabs();
@@ -6970,22 +6974,60 @@ class CWMApp {
     }
   }
 
+  /**
+   * Render a single tab button HTML string for a tab group.
+   * @param {Object} g - Tab group object { id, name, panes, folderId }
+   * @returns {string} HTML string for the tab button
+   */
+  _renderTabButtonHtml(g) {
+    const isActive = g.id === this._activeGroupId;
+    const paneCount = g.panes ? g.panes.length : 0;
+    const hasActive = g.panes && g.panes.some(p => {
+      const tp = this.terminalPanes.find((_, i) => p.slot === i);
+      return tp !== null;
+    });
+    return `<button class="terminal-group-tab${isActive ? ' active' : ''}" data-group-id="${g.id}">
+      <span class="terminal-group-tab-dot${hasActive ? '' : ' inactive'}"></span>
+      <span class="terminal-group-tab-name">${this.escapeHtml(g.name)}</span>
+      ${paneCount > 0 ? `<span class="terminal-group-tab-count">${paneCount}</span>` : ''}
+    </button>`;
+  }
+
   renderTerminalGroupTabs() {
     if (!this.els.terminalGroupsTabs) return;
 
-    let html = this._tabGroups.map(g => {
-      const isActive = g.id === this._activeGroupId;
-      const paneCount = g.panes ? g.panes.length : 0;
-      const hasActive = g.panes && g.panes.some(p => {
-        const tp = this.terminalPanes.find((_, i) => p.slot === i);
-        return tp !== null;
-      });
-      return `<button class="terminal-group-tab${isActive ? ' active' : ''}" data-group-id="${g.id}">
-        <span class="terminal-group-tab-dot${hasActive ? '' : ' inactive'}"></span>
-        <span class="terminal-group-tab-name">${this.escapeHtml(g.name)}</span>
-        ${paneCount > 0 ? `<span class="terminal-group-tab-count">${paneCount}</span>` : ''}
-      </button>`;
-    }).join('');
+    // Available folder colors — maps to Catppuccin CSS vars
+    const FOLDER_COLORS = ['mauve', 'blue', 'green', 'peach', 'red', 'pink', 'teal', 'yellow'];
+
+    // Build HTML: folders first (with their tabs), then ungrouped tabs
+    let html = '';
+
+    // Render each folder and its tabs
+    for (const folder of this._tabFolders) {
+      const folderTabs = this._tabGroups.filter(g => g.folderId === folder.id);
+      const totalPanes = folderTabs.reduce((sum, g) => sum + (g.panes ? g.panes.length : 0), 0);
+      const color = folder.color || 'mauve';
+
+      html += `<div class="tab-folder${folder.collapsed ? ' collapsed' : ''}" data-folder-id="${folder.id}">`;
+      html += `<button class="tab-folder-header" data-folder-id="${folder.id}" style="--folder-color: var(--${color})">`;
+      html += `<span class="tab-folder-chevron">${folder.collapsed ? '&#9656;' : '&#9662;'}</span>`;
+      html += `<span class="tab-folder-name">${this.escapeHtml(folder.name)}</span>`;
+      if (totalPanes > 0) html += `<span class="tab-folder-count">${totalPanes}</span>`;
+      html += `</button>`;
+
+      if (!folder.collapsed) {
+        for (const g of folderTabs) {
+          html += this._renderTabButtonHtml(g);
+        }
+      }
+      html += `</div>`;
+    }
+
+    // Render ungrouped tabs (no folderId)
+    const ungrouped = this._tabGroups.filter(g => !g.folderId);
+    for (const g of ungrouped) {
+      html += this._renderTabButtonHtml(g);
+    }
 
     // Sticky "+" button at the end — stays pinned when tabs overflow
     html += `<button class="terminal-groups-add" id="terminal-groups-add" title="New tab group">
@@ -6999,6 +7041,71 @@ class CWMApp {
     // Bind the "+" button
     const addBtn = this.els.terminalGroupsTabs.querySelector('.terminal-groups-add');
     if (addBtn) addBtn.addEventListener('click', () => this.createTerminalGroup());
+
+    // Bind folder header events
+    this.els.terminalGroupsTabs.querySelectorAll('.tab-folder-header').forEach(hdr => {
+      const folderId = hdr.dataset.folderId;
+
+      // Click to toggle collapse
+      hdr.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const folder = this._tabFolders.find(f => f.id === folderId);
+        if (folder) {
+          folder.collapsed = !folder.collapsed;
+          this.renderTerminalGroupTabs();
+          this.saveTerminalLayout();
+        }
+      });
+
+      // Right-click context menu on folder header
+      hdr.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const folder = this._tabFolders.find(f => f.id === folderId);
+        if (!folder) return;
+
+        const colorItems = FOLDER_COLORS.map(c => ({
+          label: c.charAt(0).toUpperCase() + c.slice(1),
+          icon: `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--${c})"></span>`,
+          action: () => { folder.color = c; this.renderTerminalGroupTabs(); this.saveTerminalLayout(); },
+        }));
+
+        this.showContextMenu([
+          { label: 'Rename Group', action: () => {
+            const nameEl = hdr.querySelector('.tab-folder-name');
+            if (nameEl) this._startInlineFolderRename(nameEl, folderId);
+          }},
+          { label: 'Color', submenu: colorItems },
+          { type: 'sep' },
+          { label: 'Ungroup All', action: () => this._ungroupFolder(folderId) },
+          { label: 'Delete Group + Tabs', danger: true, action: () => this._deleteFolder(folderId) },
+        ], e.clientX, e.clientY);
+      });
+
+      // Accept terminal pane drops on folder header — adds to first tab in folder
+      hdr.addEventListener('dragover', (e) => {
+        const types = e.dataTransfer.types;
+        const hasTerminal = (types.includes ? types.includes('cwm/terminal-swap') : types.contains && types.contains('cwm/terminal-swap'));
+        if (hasTerminal) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          hdr.classList.add('tab-drag-over');
+        }
+      });
+      hdr.addEventListener('dragleave', () => hdr.classList.remove('tab-drag-over'));
+      hdr.addEventListener('drop', (e) => {
+        e.preventDefault();
+        hdr.classList.remove('tab-drag-over');
+        const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
+        if (swapSource !== '') {
+          const srcSlot = parseInt(swapSource, 10);
+          const folderTabs = this._tabGroups.filter(g => g.folderId === folderId);
+          if (folderTabs.length > 0 && folderTabs[0].id !== this._activeGroupId) {
+            this.moveTerminalToGroup(srcSlot, folderTabs[0].id);
+          }
+        }
+      });
+    });
 
     // Bind tab click + drag events
     this.els.terminalGroupsTabs.querySelectorAll('.terminal-group-tab').forEach(tab => {
@@ -7016,9 +7123,15 @@ class CWMApp {
         this.els.terminalGroupsTabs.querySelectorAll('.tab-drag-over').forEach(el => el.classList.remove('tab-drag-over'));
       });
       tab.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        tab.classList.add('tab-drag-over');
+        // Accept tab reorder drags and terminal pane move drags
+        const types = e.dataTransfer.types;
+        const hasTabGroup = (types.includes ? types.includes('text/tab-group-id') : types.contains && types.contains('text/tab-group-id'));
+        const hasTerminal = (types.includes ? types.includes('cwm/terminal-swap') : types.contains && types.contains('cwm/terminal-swap'));
+        if (hasTabGroup || hasTerminal) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          tab.classList.add('tab-drag-over');
+        }
       });
       tab.addEventListener('dragleave', () => {
         tab.classList.remove('tab-drag-over');
@@ -7026,6 +7139,19 @@ class CWMApp {
       tab.addEventListener('drop', (e) => {
         e.preventDefault();
         tab.classList.remove('tab-drag-over');
+
+        // Handle terminal pane drop — move terminal to this tab group
+        const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
+        if (swapSource !== '') {
+          const srcSlot = parseInt(swapSource, 10);
+          const targetGroupId = tab.dataset.groupId;
+          if (targetGroupId !== this._activeGroupId) {
+            this.moveTerminalToGroup(srcSlot, targetGroupId);
+          }
+          return;
+        }
+
+        // Handle tab reorder
         const draggedId = e.dataTransfer.getData('text/tab-group-id');
         const targetId = tab.dataset.groupId;
         if (draggedId && draggedId !== targetId) {
@@ -7040,10 +7166,11 @@ class CWMApp {
         if (nameEl) this.startInlineRenameGroup(nameEl, tab.dataset.groupId);
       });
 
-      // Right-click context menu — includes "Move Left/Right"
+      // Right-click context menu — includes folder management
       tab.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const groupId = tab.dataset.groupId;
+        const group = this._tabGroups.find(g => g.id === groupId);
         const groupIdx = this._tabGroups.findIndex(g => g.id === groupId);
         const ctxItems = [
           { label: 'Rename', action: () => {
@@ -7061,6 +7188,36 @@ class CWMApp {
             this._swapTabGroups(groupIdx, groupIdx + 1);
           }});
         }
+
+        // Folder assignment submenu
+        ctxItems.push({ type: 'sep' });
+        if (group && group.folderId) {
+          ctxItems.push({ label: 'Remove from Group', action: () => {
+            group.folderId = null;
+            this.renderTerminalGroupTabs();
+            this.saveTerminalLayout();
+          }});
+        }
+        if (this._tabFolders.length > 0) {
+          const folderItems = this._tabFolders
+            .filter(f => !group || group.folderId !== f.id)
+            .map(f => ({
+              label: f.name,
+              icon: `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--${f.color || 'mauve'})"></span>`,
+              action: () => {
+                if (group) group.folderId = f.id;
+                this.renderTerminalGroupTabs();
+                this.saveTerminalLayout();
+              },
+            }));
+          if (folderItems.length > 0) {
+            ctxItems.push({ label: 'Add to Group', submenu: folderItems });
+          }
+        }
+        ctxItems.push({ label: 'New Group from Tab', action: () => {
+          this._createFolderFromTab(groupId);
+        }});
+
         ctxItems.push({ type: 'sep' });
         ctxItems.push(
           { label: 'Delete', danger: true, action: () => this.deleteTerminalGroup(groupId) },
@@ -7110,7 +7267,7 @@ class CWMApp {
     if (group && group.panes) {
       group.panes.forEach(p => {
         if (p.sessionId) {
-          this.openTerminalInPane(p.slot, p.sessionId, p.sessionName || 'Terminal');
+          this.openTerminalInPane(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
         }
       });
     }
@@ -7130,6 +7287,7 @@ class CWMApp {
           slot: i,
           sessionId: this.terminalPanes[i].sessionId,
           sessionName: this.terminalPanes[i].sessionName,
+          spawnOpts: this.terminalPanes[i].spawnOpts || {},
         });
       }
     }
@@ -7142,6 +7300,123 @@ class CWMApp {
     this.saveTerminalLayout();
     this.renderTerminalGroupTabs();
     this.showToast(`Created tab group "${name}"`, 'success');
+  }
+
+  /**
+   * Create a new tab folder from a single tab — the tab becomes the first member.
+   * @param {string} tabGroupId - Tab group to seed the folder with
+   */
+  _createFolderFromTab(tabGroupId) {
+    const group = this._tabGroups.find(g => g.id === tabGroupId);
+    if (!group) return;
+
+    const folderId = 'tf_' + Date.now().toString(36);
+    const colors = ['mauve', 'blue', 'green', 'peach', 'red', 'pink', 'teal', 'yellow'];
+    const color = colors[this._tabFolders.length % colors.length];
+
+    this._tabFolders.push({ id: folderId, name: group.name, color, collapsed: false });
+    group.folderId = folderId;
+
+    this.renderTerminalGroupTabs();
+    this.saveTerminalLayout();
+    this.showToast(`Created group "${group.name}"`, 'success');
+  }
+
+  /**
+   * Ungroup all tabs in a folder — removes the folder, tabs become ungrouped.
+   * @param {string} folderId - Folder to ungroup
+   */
+  _ungroupFolder(folderId) {
+    this._tabGroups.forEach(g => {
+      if (g.folderId === folderId) g.folderId = null;
+    });
+    this._tabFolders = this._tabFolders.filter(f => f.id !== folderId);
+    this.renderTerminalGroupTabs();
+    this.saveTerminalLayout();
+  }
+
+  /**
+   * Delete a folder and all its tab groups.
+   * @param {string} folderId - Folder to delete
+   */
+  _deleteFolder(folderId) {
+    const folderTabs = this._tabGroups.filter(g => g.folderId === folderId);
+
+    // Don't delete if it would remove the last tab group
+    const remainingCount = this._tabGroups.length - folderTabs.length;
+    if (remainingCount < 1) {
+      this.showToast('Cannot delete — would remove all tabs', 'warning');
+      return;
+    }
+
+    // Delete each tab in the folder
+    for (const tab of folderTabs) {
+      if (this._activeGroupId === tab.id) {
+        // Switch to the first non-folder tab before deleting
+        const other = this._tabGroups.find(g => g.folderId !== folderId);
+        if (other) {
+          this._activeGroupId = '__switching__';
+          this.switchTerminalGroup(other.id);
+        }
+      }
+    }
+
+    this._tabGroups = this._tabGroups.filter(g => g.folderId !== folderId);
+    this._tabFolders = this._tabFolders.filter(f => f.id !== folderId);
+
+    this.renderTerminalGroupTabs();
+    this.saveTerminalLayout();
+  }
+
+  /**
+   * Inline rename for a folder header name element.
+   * @param {HTMLElement} nameEl - The span element containing the folder name
+   * @param {string} folderId - Folder to rename
+   */
+  _startInlineFolderRename(nameEl, folderId) {
+    const folder = this._tabFolders.find(f => f.id === folderId);
+    if (!folder) return;
+
+    const currentName = nameEl.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'inline-rename-input';
+    input.value = currentName;
+    input.style.width = '80px';
+    nameEl.textContent = '';
+    nameEl.appendChild(input);
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      const newName = input.value.trim() || currentName;
+      folder.name = newName;
+      nameEl.textContent = newName;
+      this.saveTerminalLayout();
+    };
+
+    let mouseDownInside = false;
+    input.addEventListener('mousedown', () => { mouseDownInside = true; });
+    document.addEventListener('mouseup', () => {
+      if (mouseDownInside) {
+        mouseDownInside = false;
+        setTimeout(() => { if (!committed) input.focus(); }, 0);
+      }
+    }, { once: false, capture: true });
+
+    input.addEventListener('blur', () => {
+      if (mouseDownInside) return;
+      setTimeout(() => {
+        if (!committed && document.activeElement !== input) commit();
+      }, 100);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      if (e.key === 'Escape') { input.value = currentName; commit(); }
+    });
   }
 
   deleteTerminalGroup(groupId) {
@@ -7199,6 +7474,74 @@ class CWMApp {
     this.saveTerminalLayout();
   }
 
+  /**
+   * Move a terminal pane from the active tab group to a different tab group.
+   * Disposes the terminal in the current tab and records it in the target group's
+   * pane list. When the user switches to the target tab, the terminal reconnects.
+   * @param {number} srcSlot - Source pane slot index (0-3)
+   * @param {string} targetGroupId - Target tab group ID
+   */
+  moveTerminalToGroup(srcSlot, targetGroupId) {
+    const tp = this.terminalPanes[srcSlot];
+    if (!tp) return;
+
+    const targetGroup = this._tabGroups.find(g => g.id === targetGroupId);
+    if (!targetGroup) return;
+
+    // Capture session info before disposing
+    const sessionInfo = {
+      sessionId: tp.sessionId,
+      sessionName: tp.sessionName,
+      spawnOpts: tp.spawnOpts || {},
+    };
+
+    // Dispose the terminal in the current tab (WebSocket disconnects, PTY stays alive)
+    tp.dispose();
+    this.terminalPanes[srcSlot] = null;
+
+    // Reset the pane DOM to empty drop-target state
+    const paneEl = document.getElementById(`term-pane-${srcSlot}`);
+    if (paneEl) {
+      paneEl.classList.add('terminal-pane-empty');
+      paneEl.classList.remove('terminal-pane-active');
+      const header = paneEl.querySelector('.terminal-pane-title');
+      if (header) header.textContent = 'Drop a session here';
+      const closeBtn = paneEl.querySelector('.terminal-pane-close');
+      if (closeBtn) closeBtn.hidden = true;
+      const uploadBtn = paneEl.querySelector('.terminal-pane-upload');
+      if (uploadBtn) uploadBtn.hidden = true;
+      const termContainer = paneEl.querySelector('.terminal-container');
+      if (termContainer) termContainer.innerHTML = '';
+    }
+
+    // Update grid layout for current tab
+    this.updateTerminalGridLayout();
+
+    // Save current group panes (now minus the moved terminal)
+    this.saveCurrentGroupPanes();
+
+    // Find first available slot in target group (slots 0-3, pick one not used)
+    const usedSlots = new Set((targetGroup.panes || []).map(p => p.slot));
+    let newSlot = 0;
+    for (let i = 0; i < 4; i++) {
+      if (!usedSlots.has(i)) { newSlot = i; break; }
+    }
+
+    // Add to target group's pane list
+    if (!targetGroup.panes) targetGroup.panes = [];
+    targetGroup.panes.push({
+      slot: newSlot,
+      sessionId: sessionInfo.sessionId,
+      sessionName: sessionInfo.sessionName,
+      spawnOpts: sessionInfo.spawnOpts,
+    });
+
+    // Persist and update UI
+    this.saveTerminalLayout();
+    this.renderTerminalGroupTabs();
+    this.showToast(`Moved "${sessionInfo.sessionName}" to "${targetGroup.name}"`, 'info');
+  }
+
   startInlineRenameGroup(nameEl, groupId) {
     const currentName = nameEl.textContent;
     const input = document.createElement('input');
@@ -7254,6 +7597,7 @@ class CWMApp {
       try {
         await this.api('PUT', '/api/layout', {
           tabGroups: this._tabGroups,
+          tabFolders: this._tabFolders,
           activeGroupId: this._activeGroupId,
         });
       } catch (_) {}
