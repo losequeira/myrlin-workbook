@@ -95,10 +95,32 @@ backupFrontend();
 
 // ─── Open Browser (Windows) ────────────────────────────────
 // Skip auto-open when running headless (e.g., marketing capture pipeline)
+// --cdp flag launches browser with Chrome DevTools Protocol remote debugging
+// so the visual-qa MCP server can screenshot and inspect the UI.
 
 if (!process.env.CWM_NO_OPEN) {
   const { exec } = require('child_process');
-  exec(`start http://localhost:${port}`);
+  const cdpEnabled = process.argv.includes('--cdp');
+  const cdpPort = parseInt(process.env.CDP_PORT, 10) || 9222;
+
+  if (cdpEnabled) {
+    // Launch Chrome/Edge with remote debugging enabled for CDP inspection
+    exec(`start chrome --remote-debugging-port=${cdpPort} http://localhost:${port}`, (err) => {
+      if (err) {
+        // Chrome not found — try Edge (common on Windows)
+        exec(`start msedge --remote-debugging-port=${cdpPort} http://localhost:${port}`, (err2) => {
+          if (err2) {
+            console.log(`Could not launch browser with CDP. Open manually with --remote-debugging-port=${cdpPort}`);
+            exec(`start http://localhost:${port}`);
+          }
+        });
+      }
+    });
+    console.log(`CDP remote debugging enabled on port ${cdpPort}`);
+    console.log(`Visual QA MCP can connect at localhost:${cdpPort}`);
+  } else {
+    exec(`start http://localhost:${port}`);
+  }
 }
 
 // ─── Graceful Shutdown ─────────────────────────────────────

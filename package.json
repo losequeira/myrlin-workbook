@@ -1,6 +1,6 @@
 {
   "name": "claude-workspace-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser-based workspace manager for Claude Code sessions — session discovery, multi-terminal, cost tracking, docs, and kanban board",
   "main": "src/index.js",
   "bin": {
@@ -15,6 +15,8 @@
     "marketing": "node scripts/marketing/capture.js && node scripts/marketing/gifify.js && node scripts/marketing/composite.js",
     "marketing:screenshots": "node scripts/marketing/capture.js --screenshots-only && node scripts/marketing/composite.js",
     "marketing:gifs": "node scripts/marketing/capture.js --gifs-only && node scripts/marketing/gifify.js",
+    "mcp:visual-qa": "node src/mcp/visual-qa.js",
+    "gui:cdp": "node src/gui.js --cdp",
     "marketing:setup": "npx playwright install chromium"
   },
   "repository": {
@@ -44,6 +46,7 @@
     "blessed": "^0.1.81",
     "blessed-contrib": "^4.11.0",
     "chalk": "^5.6.2",
+    "chrome-remote-interface": "^0.34.0",
     "express": "^5.2.1",
     "node-pty": "^1.1.0",
     "ws": "^8.19.0"
