@@ -512,8 +512,8 @@
   }
 
   body.terminal-active .app {
-    height: 100vh;
-    height: 100dvh;
+    height: var(--vh, 100vh);
+    height: var(--vh, 100dvh);
   }
 
   /* Main content must not scroll when terminal is active */
@@ -583,6 +583,50 @@
   /* Hide desktop pane headers on mobile (tabs replace them) */
   .terminal-pane.mobile-active .terminal-pane-header {
     display: none;
+  }
+
+  /* Keyboard open: lock page, hide tab bar, reclaim space */
+  body.keyboard-open {
+    position: fixed;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  body.keyboard-open .mobile-tab-bar {
+    display: none !important;
+  }
+
+  body.keyboard-open .app-body {
+    padding-bottom: 0 !important;
+  }
+
+  /* Never collapse terminal below usable size */
+  .terminal-pane.mobile-active .terminal-container {
+    min-height: 80px;
+  }
+
+  /* Pane position indicator dots */
+  .terminal-pane-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 4px 0;
+    background: var(--crust);
+    flex-shrink: 0;
+  }
+
+  .terminal-pane-indicator .indicator-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--surface2);
+    transition: background 150ms ease, transform 150ms ease;
+  }
+
+  .terminal-pane-indicator .indicator-dot.active {
+    background: var(--green);
+    transform: scale(1.3);
   }
 }
 

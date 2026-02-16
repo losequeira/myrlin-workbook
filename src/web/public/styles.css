@@ -2265,7 +2265,7 @@ textarea.input {
     margin: 8px auto 0;
   }
 
-  .app-layout {
+  .app {
     height: var(--vh, 100vh);
     height: var(--vh, 100dvh);
   }

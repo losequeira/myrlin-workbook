@@ -709,6 +709,12 @@ class CWMApp {
           const vh = window.visualViewport.height;
           document.documentElement.style.setProperty('--vh', vh + 'px');
 
+          // Detect keyboard open/close on mobile
+          if (window.innerWidth <= 768) {
+            const isKeyboardOpen = vh < window.screen.height * 0.75;
+            document.body.classList.toggle('keyboard-open', isKeyboardOpen);
+          }
+
           // Refit terminal panes
           if (this.state.viewMode === 'terminal') {
             this.terminalPanes.forEach(tp => {
@@ -720,12 +726,13 @@ class CWMApp {
         }, 150);
       });
 
-      // Also listen to scroll events on visualViewport (iOS Safari)
+      // Compensate for iOS Safari viewport scroll when keyboard opens
       window.visualViewport.addEventListener('scroll', () => {
-        // Reset scroll position — we don't want the viewport to scroll,
-        // we want content to resize above the keyboard
-        if (window.visualViewport.offsetTop > 0) {
-          window.scrollTo(0, 0);
+        if (window.innerWidth > 768) return;
+        const offset = window.visualViewport.offsetTop;
+        const app = document.getElementById('app');
+        if (app) {
+          app.style.transform = offset > 0 ? `translateY(${offset}px)` : '';
         }
       });
     }
@@ -821,6 +828,8 @@ class CWMApp {
         this.initDragAndDrop();
         this.initTerminalResize();
         this.initTerminalGroups();
+        // Initialize mobile swipe gestures for pane switching
+        this.initTerminalPaneSwipe();
         this.initNotesEditor();
         this.initAIInsights();
         await this.loadAll();
@@ -907,6 +916,8 @@ class CWMApp {
         this.initDragAndDrop();
         this.initTerminalResize();
         this.initTerminalGroups();
+        // Initialize mobile swipe gestures for pane switching
+        this.initTerminalPaneSwipe();
         this.initNotesEditor();
         this.initAIInsights();
         await this.loadAll();
@@ -6014,6 +6025,68 @@ class CWMApp {
     }, { passive: true });
   }
 
+  /**
+   * Initialize horizontal swipe gesture to switch between terminal panes.
+   * Only active on mobile. Scoped to terminal-grid to avoid sidebar conflicts.
+   */
+  initTerminalPaneSwipe() {
+    if (window.innerWidth > 768) return;
+
+    const grid = this.els.terminalGrid;
+    if (!grid) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startTime = 0;
+    let swiping = false;
+
+    grid.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      // Don't capture swipe in type mode (user is interacting with terminal)
+      const activeTP = this._activeTerminalSlot !== null
+        ? this.terminalPanes[this._activeTerminalSlot] : null;
+      if (activeTP && activeTP._mobileTypeMode) return;
+
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      startTime = Date.now();
+      swiping = true;
+    }, { passive: true });
+
+    grid.addEventListener('touchend', (e) => {
+      if (!swiping) return;
+      swiping = false;
+
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      const elapsed = Date.now() - startTime;
+
+      // Must be: fast (<300ms), predominantly horizontal, >80px travel
+      if (elapsed > 300 || Math.abs(dy) > Math.abs(dx) * 0.7 || Math.abs(dx) < 80) return;
+
+      // Don't trigger if started near left edge (sidebar swipe zone)
+      if (startX < 30) return;
+
+      // Get ordered list of active pane indices
+      const activePanes = this.terminalPanes
+        .map((tp, i) => tp ? i : -1)
+        .filter(i => i !== -1);
+      if (activePanes.length <= 1) return;
+
+      const currentIdx = activePanes.indexOf(this._activeTerminalSlot);
+      if (currentIdx === -1) return;
+
+      if (dx < 0 && currentIdx < activePanes.length - 1) {
+        // Swipe left -> next pane
+        this.switchTerminalTab(activePanes[currentIdx + 1]);
+      } else if (dx > 0 && currentIdx > 0) {
+        // Swipe right -> previous pane
+        this.switchTerminalTab(activePanes[currentIdx - 1]);
+      }
+    }, { passive: true });
+  }
+
   _setupResizeDrag(handle, direction) {
     handle.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -6383,6 +6456,27 @@ class CWMApp {
       </button>`;
     }).join('') + `<button class="terminal-tab terminal-tab-add" title="Open terminal">+</button>`;
 
+    // Add pane indicator dots (mobile)
+    if (window.innerWidth <= 768 && strip) {
+      const activePaneIndices = activePanes.map(p => p.idx);
+      if (activePaneIndices.length > 1) {
+        let activeSlot = this._activeTerminalSlot;
+        // Find mobile-active pane if activeSlot not set
+        if (activeSlot === null || activeSlot === undefined) {
+          for (let i = 0; i < 4; i++) {
+            const el = document.getElementById(`term-pane-${i}`);
+            if (el && el.classList.contains('mobile-active')) { activeSlot = i; break; }
+          }
+        }
+        let dotsHtml = '<div class="terminal-pane-indicator">';
+        activePaneIndices.forEach(idx => {
+          dotsHtml += `<span class="indicator-dot${idx === activeSlot ? ' active' : ''}"></span>`;
+        });
+        dotsHtml += '</div>';
+        strip.insertAdjacentHTML('beforeend', dotsHtml);
+      }
+    }
+
     // Bind tab click handlers
     strip.querySelectorAll('.terminal-tab:not(.terminal-tab-add)').forEach(tab => {
       tab.addEventListener('click', (e) => {
@@ -6469,6 +6563,15 @@ class CWMApp {
       document.querySelectorAll('.toolbar-keyboard').forEach(kb => {
         kb.classList.toggle('toolbar-active', isTypeMode);
         kb.textContent = isTypeMode ? '\u2328 Typing' : '\u2328 Type';
+      });
+    }
+
+    // Update pane indicator dots
+    if (this.els.terminalTabStrip) {
+      const activePanes = this.terminalPanes.map((tp, i) => tp ? i : -1).filter(i => i !== -1);
+      const dots = this.els.terminalTabStrip.querySelectorAll('.indicator-dot');
+      dots.forEach((dot, i) => {
+        dot.classList.toggle('active', activePanes[i] === slotIdx);
       });
     }
   }
