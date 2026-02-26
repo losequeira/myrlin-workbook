@@ -103,6 +103,7 @@ class CWMApp {
       groups: [],
       projects: [],
       activeWorkspace: null,
+      expandedWorkspaces: new Set(JSON.parse(localStorage.getItem('cwm_expandedWorkspaces') || '[]')),
       selectedSession: null,
       viewMode: localStorage.getItem('cwm_viewMode') || 'terminal',       // workspace | all | recent | terminal
       stats: { totalWorkspaces: 0, totalSessions: 0, runningSessions: 0, activeWorkspace: null },
@@ -148,6 +149,8 @@ class CWMApp {
     this._voiceRecognitions = {};
     // Feature detection: check if Web Speech API (SpeechRecognition) is available
     this._speechRecognitionAvailable = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    // Command key recording shortcut state
+    this._metaKeyAlone = false;
 
     // ─── Quick Switcher state ──────────────────────────────────
     this.qsHighlightIndex = -1;
@@ -1012,6 +1015,9 @@ class CWMApp {
       }
     });
 
+    // ─── Voice Command Key Shortcut ───────────────────────────
+    this._initVoiceCommandShortcut();
+
     // ─── Terminal Completion Notifications ─────────────────────
     // When a terminal pane detects Claude has finished (prompt visible),
     // it dispatches a 'terminal-idle' event. We listen at the document
@@ -1025,13 +1031,17 @@ class CWMApp {
     // The 'terminal-activity' event bubbles from the terminal container.
     document.addEventListener('terminal-activity', (e) => {
       const { sessionId, activity } = e.detail;
-      // Find which slot has this session
+      // Update pane header
       for (let i = 0; i < CWMApp.MAX_PANES; i++) {
         if (this.terminalPanes[i] && this.terminalPanes[i].sessionId === sessionId) {
           this.updatePaneActivity(i, activity);
           break;
         }
       }
+      // Update sidebar session row
+      this._updateSidebarSessionActivity(sessionId, activity);
+      // Refresh workspace spinner so it reflects _isWorking immediately
+      this.renderWorkspaces();
     });
 
     // ─── Terminal Needs-Input Badge ─────────────────────────
@@ -1385,18 +1395,17 @@ class CWMApp {
       if (workspaceItem) {
         const wsId = workspaceItem.dataset.id;
         const isAlreadyActive = this.state.activeWorkspace && this.state.activeWorkspace.id === wsId;
-        if (isAlreadyActive) {
-          const accordion = workspaceItem.closest('.workspace-accordion');
-          if (accordion) {
-            const body = accordion.querySelector('.workspace-accordion-body');
-            const chevron = workspaceItem.querySelector('.ws-chevron');
-            if (body) body.hidden = !body.hidden;
-            if (chevron) chevron.classList.toggle('open', body && !body.hidden);
-          }
+        // Toggle expansion state independently of active selection
+        if (this.state.expandedWorkspaces.has(wsId)) {
+          this.state.expandedWorkspaces.delete(wsId);
         } else {
-          wsList.querySelectorAll('.workspace-accordion-body').forEach(b => b.hidden = true);
-          wsList.querySelectorAll('.ws-chevron').forEach(c => c.classList.remove('open'));
+          this.state.expandedWorkspaces.add(wsId);
+        }
+        try { localStorage.setItem('cwm_expandedWorkspaces', JSON.stringify([...this.state.expandedWorkspaces])); } catch (_) {}
+        if (!isAlreadyActive) {
           this.selectWorkspace(wsId);
+        } else {
+          this.renderWorkspaces();
         }
         return;
       }
@@ -2086,16 +2095,19 @@ class CWMApp {
   }
 
   async createWorkspace() {
-    const result = await this.showPromptModal({
+    const resultPromise = this.showPromptModal({
       title: 'New Project',
       fields: [
         { key: 'name', label: 'Name', placeholder: 'my-project', required: true },
         { key: 'description', label: 'Description', placeholder: 'What is this project for?', type: 'textarea' },
         { key: 'color', label: 'Color', type: 'color' },
+        { key: 'defaultDir', label: 'Default Directory', placeholder: '~/projects/my-app (optional)' },
       ],
       confirmText: 'Create',
       confirmClass: 'btn-primary',
     });
+    requestAnimationFrame(() => this._injectBrowseButton('modal-field-defaultDir'));
+    const result = await resultPromise;
 
     if (!result) return;
 
@@ -2113,16 +2125,19 @@ class CWMApp {
     const ws = this.state.workspaces.find(w => w.id === id);
     if (!ws) return;
 
-    const result = await this.showPromptModal({
+    const resultPromise = this.showPromptModal({
       title: 'Edit Project',
       fields: [
         { key: 'name', label: 'Name', value: ws.name, required: true },
         { key: 'description', label: 'Description', value: ws.description || '', type: 'textarea' },
         { key: 'color', label: 'Color', type: 'color', value: ws.color },
+        { key: 'defaultDir', label: 'Default Directory', value: ws.defaultDir || '', placeholder: '~/projects/my-app (optional)' },
       ],
       confirmText: 'Save',
       confirmClass: 'btn-primary',
     });
+    requestAnimationFrame(() => this._injectBrowseButton('modal-field-defaultDir'));
+    const result = await resultPromise;
 
     if (!result) return;
 
@@ -2268,10 +2283,11 @@ class CWMApp {
       templates = tData.templates || tData || [];
     } catch (_) {}
 
+    const defaultWorkingDir = this.state.activeWorkspace?.defaultDir || '';
     const fields = [
       { key: 'name', label: 'Name', placeholder: 'feature-auth', required: true },
       { key: 'topic', label: 'Topic', placeholder: 'Working on authentication flow' },
-      { key: 'workingDir', label: 'Working Directory', placeholder: '~/projects/my-app' },
+      { key: 'workingDir', label: 'Working Directory', placeholder: '~/projects/my-app', value: defaultWorkingDir },
       { key: 'command', label: 'Command', placeholder: 'claude (default)' },
     ];
 
@@ -4366,7 +4382,7 @@ class CWMApp {
       let dotClass = 'completed';
       if (groupType === 'running') {
         const tp = this.terminalPanes.find(p => p && p.sessionId === t.sessionId);
-        const isActive = tp && (Date.now() - tp._lastOutputTime) < 3000;
+        const isActive = tp && tp._isWorking === true;
         dotClass = isActive ? 'busy' : 'waiting';
       } else if (groupType === 'review') {
         dotClass = 'review';
@@ -6888,8 +6904,8 @@ class CWMApp {
 
     this.els.toastContainer.appendChild(toast);
 
-    // Auto-dismiss after 60 seconds
-    setTimeout(() => this.dismissToast(toast), 60000);
+    // Auto-dismiss after 3 seconds
+    setTimeout(() => this.dismissToast(toast), 3000);
   }
 
   dismissToast(toast) {
@@ -6975,6 +6991,14 @@ class CWMApp {
         this.showToast(`Session "${data.name || 'unknown'}" encountered an error`, 'error');
         this.loadSessions().then(() => { if (this._smOpen) this.renderSessionManager(); });
         this.loadStats();
+        break;
+      case 'session:cost:updated':
+        if (data.sessionId && this._paneStatsCache) {
+          delete this._paneStatsCache[data.sessionId];
+        }
+        this.terminalPanes.forEach((tp, slotIdx) => {
+          if (tp && tp.sessionId === data.sessionId) this._updatePaneStats(slotIdx);
+        });
         break;
       case 'session:created':
       case 'session:deleted':
@@ -7063,6 +7087,7 @@ class CWMApp {
 
     const renderWorkspaceItem = (ws, isChild = false) => {
       const isActive = this.state.activeWorkspace && this.state.activeWorkspace.id === ws.id;
+      const isExpanded = this.state.expandedWorkspaces.has(ws.id);
       const color = colorMap[ws.color] || colorMap.mauve;
       const allWsSessions = (this.state.allSessions || this.state.sessions).filter(s => s.workspaceId === ws.id);
       const wsSessions = allWsSessions.filter(s => this.state.showHidden || !this.state.hiddenSessions.has(s.id));
@@ -7096,7 +7121,7 @@ class CWMApp {
         if (wtTask) {
           // Check if terminal pane is actively producing output
           const tp = this.terminalPanes.find(p => p && p.sessionId === s.id);
-          const isOutputActive = tp && (Date.now() - tp._lastOutputTime) < 3000;
+          const isOutputActive = tp && tp._isWorking === true;
           if (s.status === 'running' && isOutputActive) {
             statusDot = 'var(--green)'; tristateAttr = ' data-tristate="busy"';
           } else if (s.status === 'running') {
@@ -7160,10 +7185,23 @@ class CWMApp {
         const metaParts = [badges, sizeStr ? `<span class="ws-session-size">${sizeStr}</span>` : '', timeStr ? `<span class="ws-session-time">${timeStr}</span>` : ''].filter(Boolean).join('');
         const metaRow = metaParts ? `<div class="ws-session-meta-row">${metaParts}</div>` : '';
 
+        // Build git row from cache (synchronous; async patch fills it in after render)
+        let gitRow = '';
+        if (s.workingDir) {
+          const cachedGit = this.state.gitStatusCache[s.workingDir];
+          if (cachedGit?.data?.isGitRepo && cachedGit.data.branch) {
+            const isDirty = cachedGit.data.dirty;
+            gitRow = `<div class="ws-session-git-row${isDirty ? ' dirty' : ''}" data-git-dir="${this.escapeHtml(s.workingDir)}"><span class="ws-session-git-branch">⎇ ${this.escapeHtml(cachedGit.data.branch)}${isDirty ? '*' : ''}</span></div>`;
+          } else {
+            gitRow = `<div class="ws-session-git-row" data-git-dir="${this.escapeHtml(s.workingDir)}"></div>`;
+          }
+        }
+
         return `<div class="ws-session-item${isHidden ? ' ws-session-hidden' : ''}" data-session-id="${s.id}" draggable="true" title="${this.escapeHtml(s.workingDir || '')}">
           <span class="ws-session-dot${tristateAttr}" style="background: ${statusDot}"></span>${pip}
           <span class="ws-session-name">${this.escapeHtml(name)}</span>
           ${metaRow}
+          ${gitRow}
         </div>`;
       };
 
@@ -7202,12 +7240,17 @@ class CWMApp {
       const childWrapperHtml = childrenHtml ? `<div class="ws-children" data-parent="${ws.id}">${childrenHtml}</div>` : '';
 
       const childClass = isChild ? ' ws-item-child' : '';
+      const hasActiveSession = wsSessions.some(s => {
+        if (s.status !== 'running') return false;
+        const tp = this.terminalPanes.find(p => p && p.sessionId === s.id);
+        return tp && tp._isWorking === true;
+      });
 
       return `
         <div class="workspace-accordion${childClass}" data-id="${ws.id}">
           <div class="workspace-item${isActive ? ' active' : ''}${childClass}" data-id="${ws.id}" draggable="true">
-            <span class="ws-chevron${isActive ? ' open' : ''}">&#9654;</span>
-            <div class="workspace-color-dot" style="background: ${color}"></div>
+            <span class="ws-chevron${isExpanded ? ' open' : ''}">&#9654;</span>
+            <div class="workspace-color-dot${hasActiveSession ? ' ws-active-spinner' : ''}" style="background: ${hasActiveSession ? 'transparent' : color}"></div>
             <div class="workspace-info">
               <div class="workspace-name">${this.escapeHtml(ws.name)}</div>
               <div class="workspace-session-count">${sessionCount} session${sessionCount !== 1 ? 's' : ''}</div>
@@ -7226,7 +7269,7 @@ class CWMApp {
               </button>
             </div>
           </div>
-          <div class="workspace-accordion-body"${isActive ? '' : ' hidden'}>
+          <div class="workspace-accordion-body"${isExpanded ? '' : ' hidden'}>
             ${sessionItems || '<div class="ws-session-empty">No sessions</div>'}
           </div>
         </div>${childWrapperHtml}`;
@@ -7275,6 +7318,24 @@ class CWMApp {
     html += ungrouped.map(ws => renderWorkspaceItem(ws)).join('');
 
     list.innerHTML = html;
+
+    // Async patch: fetch git status for all unique working dirs and update branch rows
+    const gitDirEls = list.querySelectorAll('.ws-session-git-row[data-git-dir]');
+    const gitDirs = new Set([...gitDirEls].map(el => el.dataset.gitDir).filter(Boolean));
+    gitDirs.forEach(dir => {
+      this.fetchGitStatus(dir).then(gitInfo => {
+        list.querySelectorAll(`.ws-session-git-row[data-git-dir="${CSS.escape(dir)}"]`).forEach(el => {
+          el.textContent = '';
+          if (!gitInfo || !gitInfo.isGitRepo || !gitInfo.branch) return;
+          const isDirty = gitInfo.dirty;
+          el.className = 'ws-session-git-row' + (isDirty ? ' dirty' : '');
+          const span = document.createElement('span');
+          span.className = 'ws-session-git-branch';
+          span.textContent = '⎇ ' + gitInfo.branch + (isDirty ? '*' : '');
+          el.appendChild(span);
+        });
+      });
+    });
 
     // Fire off async cost fetches for visible sessions (best-effort, non-blocking)
     const visibleSessionIds = (this.state.allSessions || this.state.sessions)
@@ -7609,6 +7670,7 @@ class CWMApp {
               ${s.topic ? `<span class="session-topic">${this.escapeHtml(s.topic)}</span>` : ''}
             </div>
           </div>
+          <div class="session-row-stats" id="session-row-stats-${s.id}"></div>
           <span class="session-time">${this.relativeTime(s.lastActive || s.createdAt)}</span>
         </div>`;
     }).join('');
@@ -7631,6 +7693,10 @@ class CWMApp {
         nameEl.appendChild(badge);
       });
     });
+
+    // Populate stats chips for all visible rows (non-blocking)
+    this._refreshAllSidebarStats();
+    this._startSidebarStatsTicker();
   }
 
   renderSessionDetail() {
@@ -8026,7 +8092,15 @@ class CWMApp {
       return;
     }
 
-    list.innerHTML = projects.map(p => {
+    // Snapshot which accordions are currently open so we can restore them after re-render
+    const openAccordions = new Set(
+      [...list.querySelectorAll('.project-accordion')].filter(el => {
+        const body = el.querySelector('.project-accordion-body');
+        return body && !body.hidden;
+      }).map(el => el.dataset.encoded)
+    );
+
+    list.innerHTML = projects.map(p => { // eslint-disable-line no-unsanitized/property
       const name = p.realPath ? (p.realPath.split('\\').pop() || p.encodedName) : p.encodedName;
       const encoded = p.encodedName || '';
       const isProjectHidden = this.state.hiddenProjects.has(encoded);
@@ -8054,6 +8128,12 @@ class CWMApp {
       }
 
       // Build session sub-items
+      const allManagedSessions = [...(this.state.sessions || []), ...(this.state.allSessions || [])];
+      // Read branch from cache synchronously so it survives re-renders
+      const cachedGit = this.state.gitStatusCache[p.realPath];
+      const cachedBranch = cachedGit?.data?.isGitRepo && cachedGit?.data?.branch
+        ? cachedGit.data.branch + (cachedGit.data.dirty ? '*' : '')
+        : '';
       const sessionItems = sessions.map(s => {
         const sessName = s.name || 'unnamed';
         const storedTitle = this.getProjectSessionTitle(sessName);
@@ -8064,10 +8144,19 @@ class CWMApp {
         const tooltip = storedTitle
           ? `${storedTitle}\n\nSession: ${sessName}`
           : sessName;
+        // Show ping indicator when this session is currently running in myrlin
+        const managedSession = allManagedSessions.find(ms => ms.resumeSessionId === sessName || ms.id === sessName);
+        const isRunning = managedSession && managedSession.status === 'running';
+        const ongoingIndicator = isRunning
+          ? `<span class="session-ongoing-indicator" title="Session in progress"><span class="session-ongoing-indicator-ring"></span><span class="session-ongoing-indicator-dot"></span></span>`
+          : '';
         return `<div class="project-session-item" draggable="true" data-session-name="${this.escapeHtml(sessName)}" data-project-path="${this.escapeHtml(p.realPath || '')}" data-project-encoded="${this.escapeHtml(encoded)}" title="${this.escapeHtml(tooltip)}">
-          <span class="project-session-name">${this.escapeHtml(displayName)}</span>
-          ${sessSize ? `<span class="project-session-size">${sessSize}</span>` : ''}
-          ${sessTime ? `<span class="project-session-time">${sessTime}</span>` : ''}
+          <div class="project-session-row">${ongoingIndicator}<span class="project-session-name">${this.escapeHtml(displayName)}</span></div>
+          <div class="project-session-meta-row">
+            <span class="project-session-branch">${this.escapeHtml(cachedBranch)}</span>
+            ${sessSize ? `<span class="project-session-size">${sessSize}</span>` : ''}
+            ${sessTime ? `<span class="project-session-time">${sessTime}</span>` : ''}
+          </div>
         </div>`;
       }).join('');
 
@@ -8083,6 +8172,32 @@ class CWMApp {
         </div>
       </div>`;
     }).join('');
+
+    // Restore previously open accordions
+    if (openAccordions.size > 0) {
+      list.querySelectorAll('.project-accordion').forEach(el => {
+        if (openAccordions.has(el.dataset.encoded)) {
+          const body = el.querySelector('.project-accordion-body');
+          const chevron = el.querySelector('.project-accordion-chevron');
+          if (body) body.hidden = false;
+          if (chevron) chevron.classList.add('open');
+        }
+      });
+    }
+
+    // Async fetch git branch for each project — populates cache so next render includes it synchronously
+    list.querySelectorAll('.project-accordion').forEach(accordionEl => {
+      const dir = accordionEl.dataset.path;
+      if (!dir) return;
+      this.fetchGitStatus(dir).then(gitInfo => {
+        if (!gitInfo || !gitInfo.isGitRepo || !gitInfo.branch) return;
+        const branchText = gitInfo.branch + (gitInfo.dirty ? '*' : '');
+        // Update any currently-rendered branch spans (first-render case before next re-render)
+        accordionEl.querySelectorAll('.project-session-branch').forEach(el => {
+          if (!el.textContent) el.textContent = branchText;
+        });
+      });
+    });
 
   }
 
@@ -8575,6 +8690,10 @@ class CWMApp {
     const activityEl = document.getElementById(`term-activity-${slotIdx}`);
     if (activityEl) activityEl.innerHTML = '';
 
+    // Fetch and display session stats (model, tokens, duration, ctx%)
+    this._updatePaneStats(slotIdx);
+    this._startPaneStatsTicker();
+
     // Update mobile terminal tab strip
     if (this.isMobile) {
       this.updateTerminalTabs();
@@ -8595,10 +8714,33 @@ class CWMApp {
     const el = document.getElementById(`term-activity-${slotIdx}`);
     if (!el) return;
 
+    const paneEl = document.getElementById(`term-pane-${slotIdx}`);
+
     if (!activity) {
       if (el.dataset.activityKey) {
         el.dataset.activityKey = '';
         el.innerHTML = '';
+      }
+      if (paneEl) paneEl.classList.remove('terminal-pane-working');
+      return;
+    }
+
+    // 'working' is a synthetic start-of-output signal fired before any ⏺ pattern
+    // is matched. It turns on the loading dot immediately but doesn't update the
+    // activity label text (which waits for a specific tool/thinking pattern).
+    if (activity.type === 'working') {
+      if (paneEl) paneEl.classList.add('terminal-pane-working');
+      // Start active-phase tracking on first 'working' signal
+      if (!this._activePhaseStart) this._activePhaseStart = {};
+      if (!this._activeStatsTickers) this._activeStatsTickers = {};
+      if (!this._activePhaseStart[slotIdx]) {
+        this._activePhaseStart[slotIdx] = Date.now();
+        // Poll stats every 2s while active so token counts update live
+        this._activeStatsTickers[slotIdx] = setInterval(() => {
+          const atp = this.terminalPanes[slotIdx];
+          if (atp?.sessionId && this._paneStatsCache) delete this._paneStatsCache[atp.sessionId];
+          this._updatePaneStats(slotIdx);
+        }, 2000);
       }
       return;
     }
@@ -8617,12 +8759,372 @@ class CWMApp {
     const detail = activity.detail ? ': ' + this.escapeHtml(activity.detail) : '';
     const dotClass = 'activity-dot-' + activity.type;
 
+    // Track current activity label for the live timer display
+    if (!this._activePhaseLabel) this._activePhaseLabel = {};
+    if (activity.type !== 'idle') {
+      this._activePhaseLabel[slotIdx] = label;
+      // Update the timer label in-place if it's already showing
+      const statsTimerLabel = document.getElementById(`term-pane-${slotIdx}`)
+        ?.querySelector('.pane-stats-timer-wrap .pane-stats-label');
+      if (statsTimerLabel) statsTimerLabel.textContent = label;
+    }
+
+    // Show pulsing dot while Claude is actively working; remove when idle
+    if (paneEl) {
+      if (activity.type === 'idle') {
+        paneEl.classList.remove('terminal-pane-working');
+      } else {
+        paneEl.classList.add('terminal-pane-working');
+      }
+    }
+
     // Deduplicate - skip innerHTML write if content hasn't changed
     const key = activity.type + '|' + (activity.detail || '');
     if (el.dataset.activityKey === key) return;
     el.dataset.activityKey = key;
 
     el.innerHTML = `<span class="activity-dot ${dotClass}"></span>${label}${detail}`;
+
+    // Refresh stats when Claude goes idle (just finished a response turn).
+    // Bust the cache so the latest context usage is always fetched fresh.
+    if (activity.type === 'idle') {
+      // Stop active-phase tracking and frequent polling
+      if (this._activePhaseStart) delete this._activePhaseStart[slotIdx];
+      if (this._activePhaseLabel) delete this._activePhaseLabel[slotIdx];
+      if (this._activeStatsTickers?.[slotIdx]) {
+        clearInterval(this._activeStatsTickers[slotIdx]);
+        delete this._activeStatsTickers[slotIdx];
+      }
+      const idleTp = this.terminalPanes[slotIdx];
+      if (idleTp && idleTp.sessionId) {
+        if (this._paneStatsCache) delete this._paneStatsCache[idleTp.sessionId];
+        this._updatePaneStats(slotIdx);
+      }
+    }
+  }
+
+  // ── Sidebar Activity Labels ───────────────────────────────────────────────
+
+  /**
+   * Patch the sidebar session-item row to show (or remove) a live activity
+   * label under the session name. Called on every terminal-activity event.
+   */
+  _updateSidebarSessionActivity(sessionId, activity) {
+    const item = this.els.sessionList?.querySelector(`.session-item[data-id="${sessionId}"]`);
+    if (!item) return;
+
+    let actEl = item.querySelector('.session-activity-label');
+
+    // Remove when idle or no activity; refresh stats since session just finished a turn
+    if (!activity || activity.type === 'idle' || activity.type === 'working') {
+      if (actEl) actEl.remove();
+      if (activity?.type === 'idle') {
+        if (this._paneStatsCache) delete this._paneStatsCache[sessionId]; // bust cache
+        this._refreshSidebarSessionStats(sessionId);
+      }
+      return;
+    }
+
+    if (!actEl) {
+      actEl = document.createElement('span');
+      actEl.className = 'session-activity-label';
+      const metaRow = item.querySelector('.session-meta-row');
+      if (metaRow) metaRow.prepend(actEl);
+      else item.querySelector('.session-info')?.appendChild(actEl);
+    }
+
+    const labels = {
+      thinking:   'Thinking',
+      reading:    'Reading',
+      writing:    'Writing',
+      running:    'Running',
+      searching:  'Searching',
+      delegating: 'Delegating',
+    };
+    const label = labels[activity.type] || activity.type;
+    const detail = activity.detail ? ` (${activity.detail.slice(0, 22)})` : '';
+    actEl.dataset.type = activity.type;
+    actEl.textContent = label + '…' + detail;
+  }
+
+  // ── Sidebar Row Stats ─────────────────────────────────────────────────────
+
+  /** Populate/refresh stats for one session row in the sidebar. */
+  async _refreshSidebarSessionStats(sessionId) {
+    const statsEl = document.getElementById(`session-row-stats-${sessionId}`);
+    if (!statsEl) return;
+
+    const allSessions = [...(this.state.sessions || []), ...(this.state.allSessions || [])];
+    const session = allSessions.find(s => s.id === sessionId);
+
+    if (!this._paneStatsCache) this._paneStatsCache = {};
+    const cached = this._paneStatsCache[sessionId];
+    let costData = null;
+    if (cached && Date.now() - cached.ts < 10000) {
+      costData = cached.data;
+    } else {
+      try {
+        costData = await this.api('GET', `/api/sessions/${encodeURIComponent(sessionId)}/cost`);
+        this._paneStatsCache[sessionId] = { data: costData, ts: Date.now() };
+      } catch (e) { /* stats not yet available */ }
+    }
+
+    this._renderSidebarSessionStats(statsEl, session, costData);
+  }
+
+  /** Render stats chips into a sidebar row stats container (DOM-safe). */
+  _renderSidebarSessionStats(statsEl, session, costData) {
+    const items = [];
+
+    if (costData?.modelBreakdown) {
+      const models = Object.keys(costData.modelBreakdown);
+      if (models.length > 0) {
+        const primary = models.reduce((a, b) =>
+          (costData.modelBreakdown[b].input + costData.modelBreakdown[b].output) >
+          (costData.modelBreakdown[a].input + costData.modelBreakdown[a].output) ? b : a
+        );
+        const name = this._shortenModel(primary);
+        if (name) items.push({ label: null, value: name, cls: 'srstat-model' });
+      }
+    }
+
+    if (costData?.tokens?.total > 0) {
+      items.push({ label: 'Tokens', value: this._formatTokenCount(costData.tokens.total) });
+    }
+
+    if (costData?.quota?.latestInputTokens > 0) {
+      const pct = Math.min(100, Math.round(costData.quota.latestInputTokens / 200000 * 100));
+      items.push({ label: 'Ctx', value: pct + '%' });
+    }
+
+    statsEl.textContent = '';
+    if (items.length === 0) return;
+
+    items.forEach((item, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'srstat-sep';
+        sep.textContent = '\u00b7';
+        statsEl.appendChild(sep);
+      }
+      const chip = document.createElement('span');
+      chip.className = 'srstat-chip' + (item.cls ? ' ' + item.cls : '');
+      if (item.label) {
+        chip.appendChild(document.createTextNode(item.label + '\u00a0'));
+        const strong = document.createElement('strong');
+        strong.textContent = item.value;
+        chip.appendChild(strong);
+      } else {
+        chip.textContent = item.value;
+      }
+      statsEl.appendChild(chip);
+    });
+  }
+
+  /** Fetch stats for all currently visible sidebar session rows. */
+  _refreshAllSidebarStats() {
+    const items = this.els.sessionList?.querySelectorAll('.session-item[data-id]');
+    if (!items) return;
+    items.forEach(el => this._refreshSidebarSessionStats(el.dataset.id));
+  }
+
+  /** Start a 60s ticker that keeps sidebar row stats fresh. */
+  _startSidebarStatsTicker() {
+    if (this._sidebarStatsTicker) return;
+    this._sidebarStatsTicker = setInterval(() => this._refreshAllSidebarStats(), 60000);
+  }
+
+  // ── Pane Stats Bar ────────────────────────────────────────────────────────
+
+  _formatTokenCount(n) {
+    if (!n) return '0';
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+    return String(n);
+  }
+
+  _formatDuration(isoStart) {
+    if (!isoStart) return '\u2014';
+    const s = Math.floor((Date.now() - new Date(isoStart).getTime()) / 1000);
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ' + (s % 60) + 's';
+    const h = Math.floor(m / 60);
+    const rem = m % 60;
+    return rem > 0 ? h + 'h ' + rem + 'm' : h + 'h';
+  }
+
+  _shortenModel(modelStr) {
+    if (!modelStr) return null;
+    if (modelStr.includes('opus')) return 'Opus';
+    if (modelStr.includes('sonnet')) return 'Sonnet';
+    if (modelStr.includes('haiku')) return 'Haiku';
+    const m = modelStr.match(/claude-([^-]+)/);
+    return m ? m[1].charAt(0).toUpperCase() + m[1].slice(1) : modelStr;
+  }
+
+  _makePaneStatItem(label, value, extraClass) {
+    const item = document.createElement('span');
+    item.className = 'pane-stats-item' + (extraClass ? ' ' + extraClass : '');
+    if (label) {
+      const lbl = document.createElement('span');
+      lbl.className = 'pane-stats-label';
+      lbl.textContent = label;
+      item.appendChild(lbl);
+    }
+    const val = document.createElement('span');
+    val.className = 'pane-stats-value';
+    val.textContent = value;
+    item.appendChild(val);
+    return item;
+  }
+
+  _renderPaneStats(statsEl, session, costData) {
+    const items = [];
+
+    // Model (from JSONL modelBreakdown, pick highest-usage model)
+    if (costData && costData.modelBreakdown) {
+      const models = Object.keys(costData.modelBreakdown);
+      if (models.length > 0) {
+        const primary = models.reduce((a, b) =>
+          (costData.modelBreakdown[b].input + costData.modelBreakdown[b].output) >
+          (costData.modelBreakdown[a].input + costData.modelBreakdown[a].output) ? b : a
+        );
+        const modelName = this._shortenModel(primary);
+        if (modelName) items.push(this._makePaneStatItem(null, modelName));
+      }
+    }
+
+    // Tokens
+    if (costData && costData.tokens && costData.tokens.total > 0) {
+      items.push(this._makePaneStatItem('Tokens', this._formatTokenCount(costData.tokens.total)));
+    }
+
+    // Duration (from session.createdAt; text node refreshed by ticker every 60s)
+    if (session && session.createdAt) {
+      items.push(this._makePaneStatItem('Duration', this._formatDuration(session.createdAt), 'pane-stats-duration'));
+    }
+
+    // Context % (latestInputTokens / 200K context window)
+    if (costData && costData.quota && costData.quota.latestInputTokens > 0) {
+      const pct = Math.min(100, Math.round(costData.quota.latestInputTokens / 200000 * 100));
+      const ctxItem = this._makePaneStatItem('Ctx', pct + '%');
+      if (pct >= 80) ctxItem.classList.add('ctx-critical');
+      else if (pct >= 50) ctxItem.classList.add('ctx-warning');
+      items.push(ctxItem);
+    }
+
+    if (items.length === 0) {
+      statsEl.hidden = true;
+      return;
+    }
+
+    statsEl.textContent = '';
+    items.forEach((item, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'pane-stats-sep';
+        sep.textContent = '\u00b7';
+        statsEl.appendChild(sep);
+      }
+      statsEl.appendChild(item);
+    });
+    statsEl.hidden = false;
+  }
+
+  async _updatePaneStats(slotIdx) {
+    const tp = this.terminalPanes[slotIdx];
+    if (!tp || !tp.sessionId) return;
+    const paneEl = document.getElementById(`term-pane-${slotIdx}`);
+    if (!paneEl) return;
+    const statsEl = paneEl.querySelector('.pane-stats');
+    if (!statsEl) return;
+
+    const sessionId = tp.sessionId;
+    const allSessions = [...(this.state.sessions || []), ...(this.state.allSessions || [])];
+    const session = allSessions.find(s => s.id === sessionId);
+
+    // 10s client-side cache (fallback; SSE-driven updates bypass this)
+    if (!this._paneStatsCache) this._paneStatsCache = {};
+    const cached = this._paneStatsCache[sessionId];
+    let costData = null;
+    if (cached && Date.now() - cached.ts < 10000) {
+      costData = cached.data;
+    } else {
+      try {
+        costData = await this.api('GET', `/api/sessions/${encodeURIComponent(sessionId)}/cost`);
+        this._paneStatsCache[sessionId] = { data: costData, ts: Date.now() };
+      } catch (e) {
+        // Non-critical: stats unavailable (e.g. session not yet flushed to JSONL)
+      }
+    }
+
+    this._renderPaneStats(statsEl, session, costData);
+    // Re-attach live timer after stats bar rebuild (renderPaneStats clears innerHTML)
+    this._refreshPaneStatsTimer(slotIdx, statsEl);
+  }
+
+  /**
+   * Append (or remove) the live active-phase timer item to the stats bar.
+   * Called after every _renderPaneStats rebuild so the timer survives the wipe.
+   */
+  _refreshPaneStatsTimer(slotIdx, statsEl) {
+    // Always clean up stale timer nodes first
+    statsEl.querySelector('.pane-stats-timer-sep')?.remove();
+    statsEl.querySelector('.pane-stats-timer-wrap')?.remove();
+
+    const start = this._activePhaseStart?.[slotIdx];
+    if (!start || statsEl.hidden) return;
+
+    const elapsed = Math.floor((Date.now() - start) / 1000);
+    const sep = document.createElement('span');
+    sep.className = 'pane-stats-sep pane-stats-timer-sep';
+    sep.textContent = '\u00b7';
+
+    const timerLabel = this._activePhaseLabel?.[slotIdx] || 'Active';
+    const wrap = this._makePaneStatItem(timerLabel, elapsed + 's', 'pane-stats-timer-wrap');
+    wrap.querySelector('.pane-stats-value').className = 'pane-stats-value pane-stats-timer-val';
+
+    statsEl.appendChild(sep);
+    statsEl.appendChild(wrap);
+  }
+
+  _startPaneStatsTicker() {
+    if (this._paneStatsDurationTicker) return;
+
+    // 1s ticker: update duration and active-phase timer in-place (no API calls)
+    this._paneStatsDurationTicker = setInterval(() => {
+      const allSessions = [...(this.state.sessions || []), ...(this.state.allSessions || [])];
+      this.terminalPanes.forEach((tp, slotIdx) => {
+        if (!tp || !tp.sessionId) return;
+        const paneEl = document.getElementById(`term-pane-${slotIdx}`);
+        if (!paneEl) return;
+        const statsEl = paneEl.querySelector('.pane-stats');
+        if (!statsEl || statsEl.hidden) return;
+
+        // Update session duration
+        const durationVal = statsEl.querySelector('.pane-stats-duration .pane-stats-value');
+        if (durationVal) {
+          const sess = allSessions.find(s => s.id === tp.sessionId);
+          if (sess && sess.createdAt) durationVal.textContent = this._formatDuration(sess.createdAt);
+        }
+
+        // Update active-phase timer
+        const start = this._activePhaseStart?.[slotIdx];
+        const timerVal = statsEl.querySelector('.pane-stats-timer-val');
+        if (start && timerVal) {
+          timerVal.textContent = Math.floor((Date.now() - start) / 1000) + 's';
+        } else if (start && !timerVal) {
+          // Timer element was wiped by a stats rebuild race — re-attach
+          this._refreshPaneStatsTimer(slotIdx, statsEl);
+        }
+      });
+    }, 1000);
+
+    // 10s ticker: fallback poll for model/context/tokens in case SSE is missed
+    this._paneStatsRefreshTicker = setInterval(() => {
+      this.terminalPanes.forEach((_, slotIdx) => this._updatePaneStats(slotIdx));
+    }, 10000);
   }
 
   showTerminalContextMenu(slotIdx, x, y) {
@@ -8798,11 +9300,17 @@ class CWMApp {
     this._stopVoiceRecognition(slotIdx);
     const micBtn3 = paneEl.querySelector('.terminal-pane-mic');
     if (micBtn3) { micBtn3.hidden = true; micBtn3.classList.remove('mic-active'); }
-    // Remove any interim transcript overlay
+    paneEl.classList.remove('voice-recording');
+    // Remove any interim transcript overlay and recording card
     const interimOverlay = paneEl.querySelector('.voice-interim-overlay');
     if (interimOverlay) interimOverlay.remove();
+    const recordingCardEl = paneEl.querySelector('.voice-recording-card');
+    if (recordingCardEl) recordingCardEl.remove();
+    paneEl.classList.remove('terminal-pane-working');
     const activityEl = document.getElementById(`term-activity-${slotIdx}`);
-    if (activityEl) activityEl.innerHTML = '';
+    if (activityEl) { activityEl.innerHTML = ''; activityEl.dataset.activityKey = ''; }
+    const statsEl2 = paneEl.querySelector('.pane-stats');
+    if (statsEl2) { statsEl2.textContent = ''; statsEl2.hidden = true; }
     const container = document.getElementById(`term-container-${slotIdx}`);
     if (container) container.innerHTML = '';
 
@@ -8858,12 +9366,28 @@ class CWMApp {
     }
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false;   // Single utterance mode
+    recognition.continuous = true;    // Keep listening until user explicitly stops
     recognition.interimResults = true; // Show partial results while speaking
     recognition.lang = 'en-US';
 
     const paneEl = document.getElementById(`term-pane-${slotIdx}`);
     const micBtn = paneEl ? paneEl.querySelector('.terminal-pane-mic') : null;
+
+    // Create recording overlay card (big mic icon + label)
+    let recordingCard = null;
+    if (paneEl) {
+      recordingCard = document.createElement('div');
+      recordingCard.className = 'voice-recording-card';
+      const icon = document.createElement('span');
+      icon.className = 'voice-recording-icon';
+      icon.textContent = '🎙';
+      const label = document.createElement('span');
+      label.className = 'voice-recording-label';
+      label.textContent = 'Listening…';
+      recordingCard.appendChild(icon);
+      recordingCard.appendChild(label);
+      paneEl.appendChild(recordingCard);
+    }
 
     // Create interim overlay element for showing live transcription
     let interimOverlay = null;
@@ -8874,52 +9398,53 @@ class CWMApp {
       paneEl.appendChild(interimOverlay);
     }
 
+    // Accumulate all finalized transcript segments; only send on stop.
+    let accumulatedTranscript = '';
+
     // Handle speech recognition results (both interim and final)
     recognition.onresult = (event) => {
       let interimTranscript = '';
-      let finalTranscript = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscript += transcript;
+          accumulatedTranscript += (accumulatedTranscript ? ' ' : '') + transcript.trim();
         } else {
           interimTranscript += transcript;
         }
       }
 
-      // Update the interim overlay with partial results
+      // Update the interim overlay with what's being said right now
       if (interimOverlay) {
-        interimOverlay.textContent = interimTranscript || finalTranscript || 'Listening...';
-      }
-
-      // Send final transcript to terminal via WebSocket
-      if (finalTranscript && finalTranscript.trim()) {
-        const currentTp = this.terminalPanes[slotIdx];
-        if (currentTp && currentTp.ws && currentTp.ws.readyState === WebSocket.OPEN) {
-          currentTp.ws.send(JSON.stringify({ type: 'input', data: finalTranscript.trim() + '\n' }));
-          this.showToast('Voice input sent', 'success');
-        } else {
-          this.showToast('Terminal not connected - voice input discarded', 'warning');
-        }
+        interimOverlay.textContent = interimTranscript || accumulatedTranscript || 'Listening...';
       }
     };
 
     // Handle recognition start - visual feedback
     recognition.onstart = () => {
       if (micBtn) micBtn.classList.add('mic-active');
+      if (paneEl) paneEl.classList.add('voice-recording');
       this.showToast('Listening...', 'info');
     };
 
-    // Handle recognition end - clean up visual state
+    // Handle recognition end - send accumulated transcript and clean up
     recognition.onend = () => {
       if (micBtn) micBtn.classList.remove('mic-active');
-      // Remove interim overlay
-      if (interimOverlay && interimOverlay.parentNode) {
-        interimOverlay.remove();
-      }
-      // Clean up the stored reference
+      if (paneEl) paneEl.classList.remove('voice-recording');
+      if (recordingCard && recordingCard.parentNode) recordingCard.remove();
+      if (interimOverlay && interimOverlay.parentNode) interimOverlay.remove();
       delete this._voiceRecognitions[slotIdx];
+
+      // Send everything spoken since recording started
+      if (accumulatedTranscript.trim()) {
+        const currentTp = this.terminalPanes[slotIdx];
+        if (currentTp && currentTp.ws && currentTp.ws.readyState === WebSocket.OPEN) {
+          currentTp.ws.send(JSON.stringify({ type: 'input', data: accumulatedTranscript.trim() + '\n' }));
+          this.showToast('Voice input sent', 'success');
+        } else {
+          this.showToast('Terminal not connected - voice input discarded', 'warning');
+        }
+      }
     };
 
     // Handle recognition errors
@@ -8934,6 +9459,8 @@ class CWMApp {
       const msg = errorMessages[event.error] || `Speech recognition error: ${event.error}`;
       this.showToast(msg, 'error');
       if (micBtn) micBtn.classList.remove('mic-active');
+      if (paneEl) paneEl.classList.remove('voice-recording');
+      if (recordingCard && recordingCard.parentNode) recordingCard.remove();
       // Remove interim overlay on error
       if (interimOverlay && interimOverlay.parentNode) {
         interimOverlay.remove();
@@ -8961,6 +9488,55 @@ class CWMApp {
       }
       delete this._voiceRecognitions[slotIdx];
     }
+  }
+
+  _stopVoiceRecognitionGraceful(slotIdx) {
+    const recognition = this._voiceRecognitions[slotIdx];
+    if (recognition) {
+      try { recognition.stop(); } catch (_) {}
+    }
+  }
+
+  _getActiveSlotForVoice() {
+    const slot = this._activeTerminalSlot;
+    if (slot !== null && this.terminalPanes[slot]) return slot;
+    const fallback = this.terminalPanes.findIndex(p => p !== null);
+    return fallback === -1 ? null : fallback;
+  }
+
+  _initVoiceCommandShortcut() {
+    if (!this._speechRecognitionAvailable) return;
+
+    // Track whether Command is being pressed alone (not as part of a combo).
+    // keydown Meta sets the flag; any other keydown while Meta is held clears it.
+    // keyup Meta fires the toggle only if the flag is still set.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Meta') {
+        this._metaKeyAlone = true;
+      } else if (e.metaKey) {
+        this._metaKeyAlone = false;
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      if (e.key !== 'Meta') return;
+      if (!this._metaKeyAlone) return;
+      this._metaKeyAlone = false;
+
+      const slot = this._getActiveSlotForVoice();
+      if (slot === null) {
+        this.showToast('No active terminal pane to record into', 'warning');
+        return;
+      }
+      const isRecording = !!this._voiceRecognitions[slot];
+      if (isRecording) {
+        this._stopVoiceRecognitionGraceful(slot);
+      } else {
+        this.toggleVoiceInput(slot);
+      }
+    });
+
+    window.addEventListener('blur', () => { this._metaKeyAlone = false; });
   }
 
   /**
@@ -9013,7 +9589,14 @@ class CWMApp {
         if (uploadBtnEl) uploadBtnEl.hidden = true;
         if (micBtnEl) { micBtnEl.hidden = true; micBtnEl.classList.remove('mic-active'); }
         if (container) container.innerHTML = '';
+        const swapStatsEl = paneEl.querySelector('.pane-stats');
+        if (swapStatsEl) { swapStatsEl.textContent = ''; swapStatsEl.hidden = true; }
       }
+    });
+
+    // Refresh stats for any newly occupied slots after swap
+    [srcSlot, dstSlot].forEach(slot => {
+      if (this.terminalPanes[slot]) this._updatePaneStats(slot);
     });
 
     // Update active pane tracking
@@ -12052,6 +12635,7 @@ class CWMApp {
     try {
       const data = await this.api('GET', '/api/git/status?dir=' + encodeURIComponent(dir));
       this.state.gitStatusCache[dir] = { data, timestamp: Date.now() };
+      console.log('git status', data);
       return data;
     } catch {
       return null;
@@ -13573,7 +14157,7 @@ class CWMApp {
       const resp = await fetch(`/api/pty/${tp.sessionId}/upload-image`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.authToken}`,
+          'Authorization': `Bearer ${this.state.token}`,
           'Content-Type': file.type,
           'X-Filename': encodeURIComponent(file.name),
         },
@@ -13589,37 +14173,13 @@ class CWMApp {
       return;
     }
 
-    // Show prompt modal with image thumbnail preview
-    const thumbUrl = URL.createObjectURL(file);
-    const sizeStr = file.size < 1024 * 1024
-      ? (file.size / 1024).toFixed(0) + ' KB'
-      : (file.size / (1024 * 1024)).toFixed(1) + ' MB';
-    const result = await this.showPromptModal({
-      title: 'Send Image to Session',
-      headerHtml: `<div style="text-align:center;margin-bottom:12px;">
-        <img src="${thumbUrl}" style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid var(--surface1);" alt="Preview">
-        <div style="font-size:12px;color:var(--subtext0);margin-top:6px;">${this.escapeHtml(file.name)} (${sizeStr})</div>
-      </div>`,
-      fields: [
-        { key: 'message', label: 'Message (optional)', type: 'text', placeholder: 'e.g. "What does this screenshot show?"', value: '' }
-      ],
-      confirmText: 'Send to Claude',
-      confirmClass: 'btn-primary',
-    });
-    URL.revokeObjectURL(thumbUrl);
-
-    if (!result) return; // User cancelled
-
     // Inject into PTY via WebSocket
     if (!tp.ws || tp.ws.readyState !== WebSocket.OPEN) {
       this.showToast('Terminal not connected', 'warning');
       return;
     }
 
-    const message = result.message
-      ? `${result.message} ${uploadResult.path}`
-      : `Please analyze this image: ${uploadResult.path}`;
-    tp.ws.send(JSON.stringify({ type: 'input', data: message + '\r' }));
+    tp.ws.send(JSON.stringify({ type: 'input', data: uploadResult.path + '\r' }));
 
     this.showToast('Image sent to session', 'success');
   }

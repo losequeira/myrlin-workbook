@@ -374,10 +374,13 @@ class TerminalPane {
           return false;
         }
 
-        // Shift+Enter: send newline instead of carriage return
+        // Shift+Enter: insert a literal newline into the readline input buffer.
+        // Claude Code uses readline which intercepts bare \n as "execute".
+        // Ctrl+V (\x16) puts readline into "verbatim next" mode so the
+        // following \n is inserted as a literal character instead of submitted.
         if (e.key === 'Enter' && e.shiftKey) {
           if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'input', data: '\n' }));
+            this.ws.send(JSON.stringify({ type: 'input', data: '\x16\n' }));
           }
           return false;
         }
@@ -1112,6 +1115,15 @@ class TerminalPane {
       this._isWorking = true;
       // New work started after being idle -- allow the next idle event to fire
       this._idleNotified = false;
+      // Signal working immediately — before any ⏺ pattern is matched.
+      // This ensures the loading dot appears the instant output arrives.
+      const workingContainer = document.getElementById(this.containerId);
+      if (workingContainer) {
+        workingContainer.dispatchEvent(new CustomEvent('terminal-activity', {
+          bubbles: true,
+          detail: { sessionId: this.sessionId, activity: { type: 'working' } }
+        }));
+      }
     }
     // Debounced idle check - if no output for 2 seconds after burst, check for prompt
     clearTimeout(this._idleCheckTimer);
@@ -1128,17 +1140,35 @@ class TerminalPane {
   _checkForCompletion() {
     if (!this._isWorking || !this.term) return;
 
-    // Read the last line of the terminal buffer at the cursor position
+    // Read lines around the cursor position. The cursor may rest on the
+    // "Baked for Xs" completion line while the ❯ prompt is one row away,
+    // so we scan a small window (cursor row ± 3) to find a prompt.
     const buffer = this.term.buffer.active;
     const cursorRow = buffer.cursorY + buffer.baseY;
-    const line = buffer.getLine(cursorRow);
-    if (!line) return;
 
-    const lineText = line.translateToString(true).trim();
+    // Claude Code prompt patterns:
+    //   ❯  — Claude Code REPL prompt (primary signal)
+    //   $  — bash/zsh shell prompt (must be preceded by a space or start of line to
+    //         avoid matching variable expansions like "$HOME")
+    // Deliberately excludes bare ">" to avoid false-positives on mid-task dialogs
+    // such as "Accept edit? [Y/n] >" which are NOT true idle states.
+    // Also match "Human:" / "Type.*message" from the conversation UI.
+    const isPrompt = (text) =>
+      /❯\s*$/.test(text) || /(?:^|\s)\$\s*$/.test(text) || /^(Human:|Type.*message)/.test(text);
 
-    // Claude Code prompt patterns: ends with ❯, $, or >
-    // Also match "Human:" which appears in Claude's conversation UI
-    if (/[❯$>]\s*$/.test(lineText) || /^(Human:|Type.*message)/.test(lineText)) {
+    let lineText = '';
+    for (let offset = 0; offset <= 3; offset++) {
+      for (const row of [cursorRow + offset, cursorRow - offset]) {
+        if (row < 0) continue;
+        const l = buffer.getLine(row);
+        if (!l) continue;
+        const t = l.translateToString(true).trim();
+        if (isPrompt(t)) { lineText = t; break; }
+      }
+      if (lineText) break;
+    }
+
+    if (isPrompt(lineText)) {
       this._isWorking = false;
 
       // Update activity to idle when prompt is detected

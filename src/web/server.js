@@ -235,7 +235,7 @@ app.get('/api/workspaces/:id', requireAuth, (req, res) => {
  * Body: { name, description?, color? }
  */
 app.post('/api/workspaces', requireAuth, (req, res) => {
-  const { name, description, color } = req.body || {};
+  const { name, description, color, defaultDir } = req.body || {};
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'Workspace name is required.' });
@@ -244,11 +244,18 @@ app.post('/api/workspaces', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Workspace name must be 100 characters or fewer.' });
   }
 
+  let safeDefaultDir = '';
+  if (defaultDir) {
+    safeDefaultDir = sanitizeWorkingDir(defaultDir) || '';
+    if (!safeDefaultDir) return res.status(400).json({ error: 'Invalid default directory path.' });
+  }
+
   const store = getStore();
   const workspace = store.createWorkspace({
     name: name.trim(),
     description: description || '',
     color: color || 'cyan',
+    defaultDir: safeDefaultDir,
   });
 
   return res.status(201).json({ workspace });
@@ -277,7 +284,14 @@ app.put('/api/workspaces/reorder', requireAuth, (req, res) => {
 
 app.put('/api/workspaces/:id', requireAuth, (req, res) => {
   const store = getStore();
-  const workspace = store.updateWorkspace(req.params.id, req.body);
+  const updates = req.body;
+  if (updates.defaultDir !== undefined) {
+    updates.defaultDir = updates.defaultDir ? (sanitizeWorkingDir(updates.defaultDir) || '') : '';
+    if (req.body.defaultDir && !updates.defaultDir) {
+      return res.status(400).json({ error: 'Invalid default directory path.' });
+    }
+  }
+  const workspace = store.updateWorkspace(req.params.id, updates);
 
   if (!workspace) {
     return res.status(404).json({ error: 'Workspace not found.' });
@@ -697,6 +711,12 @@ app.put('/api/sessions/:id', requireAuth, (req, res) => {
 
   if (!session) {
     return res.status(404).json({ error: 'Session not found.' });
+  }
+
+  // Stop JSONL file watcher when session stops
+  if (updates.status === 'stopped') {
+    const rsid = session.resumeSessionId || req.params.id;
+    stopJsonlWatcher(rsid);
   }
 
   // Auto-transition worktree tasks to "review" when their session stops
@@ -1653,6 +1673,36 @@ const DEFAULT_PRICING = { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3
 const _costCache = new Map();
 const COST_CACHE_TTL = 60000; // 60 seconds
 
+/** JSONL file watchers: keyed by resumeSessionId, stores { watcher, debounceTimer } */
+const _jsonlWatchers = new Map();
+
+function ensureJsonlWatcher(sessionId, jsonlPath) {
+  if (_jsonlWatchers.has(sessionId)) return;
+  try {
+    const watcher = fs.watch(jsonlPath, () => {
+      const entry = _jsonlWatchers.get(sessionId);
+      if (!entry) return;
+      clearTimeout(entry.debounceTimer);
+      entry.debounceTimer = setTimeout(() => {
+        _costCache.delete(sessionId);
+        broadcastSSE('session:cost:updated', { sessionId });
+      }, 300);
+    });
+    watcher.on('error', () => stopJsonlWatcher(sessionId));
+    _jsonlWatchers.set(sessionId, { watcher, debounceTimer: null });
+  } catch (_) {
+    // JSONL not yet created — polling fallback handles it
+  }
+}
+
+function stopJsonlWatcher(sessionId) {
+  const entry = _jsonlWatchers.get(sessionId);
+  if (!entry) return;
+  clearTimeout(entry.debounceTimer);
+  try { entry.watcher.close(); } catch (_) {}
+  _jsonlWatchers.delete(sessionId);
+}
+
 /**
  * Find a JSONL file for a given Claude session UUID by scanning
  * all project directories under ~/.claude/projects/.
@@ -1822,11 +1872,12 @@ function calculateSessionCost(jsonlPath) {
       totals.cacheWrite += cacheWriteTokens;
       totals.cacheRead += cacheReadTokens;
 
-      // Track context window growth (input_tokens per message = current context size)
-      latestInputTokens = inputTokens;
-      if (inputTokens > peakInputTokens) peakInputTokens = inputTokens;
+      // Track context window growth (true context size = input + cached tokens)
+      const contextTokens = inputTokens + cacheWriteTokens + cacheReadTokens;
+      latestInputTokens = contextTokens;
+      if (contextTokens > peakInputTokens) peakInputTokens = contextTokens;
       // Sample every message for the growth timeline (capped at 100 samples)
-      contextSamples.push({ msg: messageCount, tokens: inputTokens, ts });
+      contextSamples.push({ msg: messageCount, tokens: contextTokens, ts });
 
       // Per-model breakdown
       if (!modelBreakdown[model]) {
@@ -1938,6 +1989,11 @@ app.get('/api/sessions/:id/cost', requireAuth, (req, res) => {
       firstMessage: null,
       lastMessage: null,
     });
+  }
+
+  // Start watching the JSONL file for real-time stat updates (only for running sessions)
+  if (session && session.status === 'running') {
+    ensureJsonlWatcher(resumeSessionId, jsonlPath);
   }
 
   try {
@@ -4184,7 +4240,6 @@ function attachStoreEvents() {
     'workspace:deleted',
     'workspace:activated',
     'session:created',
-    'session:updated',
     'session:deleted',
     'session:log',
     'settings:updated',
@@ -4202,6 +4257,19 @@ function attachStoreEvents() {
       broadcastSSE(eventName, data);
     });
   }
+
+  // Dedicated handler for session:updated — also starts JSONL watcher proactively
+  store.on('session:updated', (session) => {
+    broadcastSSE('session:updated', session);
+    // Start watcher immediately when resumeSessionId is first detected so Ctx% populates right away
+    if (session.resumeSessionId && session.status === 'running') {
+      const p = findJsonlFile(session.resumeSessionId);
+      if (p) {
+        ensureJsonlWatcher(session.resumeSessionId, p);
+        broadcastSSE('session:cost:updated', { sessionId: session.id });
+      }
+    }
+  });
 }
 
 // ──────────────────────────────────────────────────────────
@@ -6349,6 +6417,14 @@ function startServer(port = 3456, host = '127.0.0.1') {
 
   // Backfill missing resumeSessionIds so cost tracking works for all sessions
   setImmediate(() => backfillResumeSessionIds());
+  // Start JSONL watchers for any sessions that were already running before this boot
+  {
+    const store = getStore();
+    store.getAllSessionsList().filter(s => s.status === 'running' && s.resumeSessionId).forEach(s => {
+      const p = findJsonlFile(s.resumeSessionId);
+      if (p) ensureJsonlWatcher(s.resumeSessionId, p);
+    });
+  }
 
   const server = app.listen(port, host, () => {
     // Server is ready - caller handles the log message

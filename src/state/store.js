@@ -213,7 +213,7 @@ class Store extends EventEmitter {
 
   // ─── Workspace CRUD ──────────────────────────────────────
 
-  createWorkspace({ name, description = '', color = 'cyan' }) {
+  createWorkspace({ name, description = '', color = 'cyan', defaultDir = '' }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const workspace = {
@@ -221,6 +221,7 @@ class Store extends EventEmitter {
       name,
       description,
       color,
+      defaultDir,
       sessions: [],
       createdAt: now,
       lastActive: now,
