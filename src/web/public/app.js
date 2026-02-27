@@ -173,6 +173,21 @@ class CWMApp {
     // ─── Modal state ───────────────────────────────────────────
     this.modalResolve = null;
 
+    // ─── Workspaces Editor state ──────────────────────────────
+    this._we = {
+      selectedWorkspaceId: null,
+      selectedSessionId: null,
+      selectedSessionDir: null,
+      openTabs: [],            // [{ path, name, content, modified, lang }]
+      activeTabIndex: -1,
+      cmView: null,            // CodeMirror EditorView instance
+      gitCollapsed: false,
+      treeExpandedDirs: new Set(),
+      gitStatus: null,
+      initialized: false,
+      cmLoaded: false,
+    };
+
     // ─── Boot ──────────────────────────────────────────────────
     this.cacheElements();
     this.bindEvents();
@@ -491,6 +506,35 @@ class CWMApp {
       smSelectAllBtn: document.getElementById('sm-select-all-btn'),
       smStopSelectedBtn: document.getElementById('sm-stop-selected-btn'),
       smCloseBtn: document.getElementById('sm-close-btn'),
+
+      // Workspaces Editor
+      workspacesEditorPanel: document.getElementById('workspaces-editor-panel'),
+      weWorkspaceSelect:    document.getElementById('we-workspace-select'),
+      weSessionList:        document.getElementById('we-session-list'),
+      weTreeBody:           document.getElementById('we-tree-body'),
+      weResizeHandle:       document.getElementById('we-resize-handle'),
+      weTreePanel:          document.getElementById('we-tree-panel'),
+      weTabs:               document.getElementById('we-tabs'),
+      weSaveBtn:            document.getElementById('we-save-btn'),
+      weUndoBtn:            document.getElementById('we-undo-btn'),
+      weRedoBtn:            document.getElementById('we-redo-btn'),
+      weGitToggleBtn:       document.getElementById('we-git-toggle-btn'),
+      weEditorContainer:    document.getElementById('we-editor-container'),
+      weEditorEmpty:        document.getElementById('we-editor-empty'),
+      weGitPanel:           document.getElementById('we-git-panel'),
+      weGitHeader:          document.getElementById('we-git-header'),
+      weGitCollapseBtn:     document.getElementById('we-git-collapse-btn'),
+      weGitBranch:          document.getElementById('we-git-branch'),
+      weGitAheadBehind:     document.getElementById('we-git-ahead-behind'),
+      weGitRefreshBtn:      document.getElementById('we-git-refresh-btn'),
+      weGitPushBtn:         document.getElementById('we-git-push-btn'),
+      weGitPrBtn:           document.getElementById('we-git-pr-btn'),
+      weGitStagedFiles:     document.getElementById('we-git-staged-files'),
+      weGitUnstagedFiles:   document.getElementById('we-git-unstaged-files'),
+      weGitUnstageAllBtn:   document.getElementById('we-git-unstage-all-btn'),
+      weGitStageAllBtn:     document.getElementById('we-git-stage-all-btn'),
+      weGitCommitMsg:       document.getElementById('we-git-commit-msg'),
+      weGitCommitBtn:       document.getElementById('we-git-commit-btn'),
     };
   }
 
@@ -959,6 +1003,11 @@ class CWMApp {
 
     // Global keyboard shortcuts
     document.addEventListener('keydown', (e) => {
+      // Ctrl+S / Cmd+S - Save in Workspaces Editor
+      if ((e.ctrlKey || e.metaKey) && e.key === 's' && this.state.viewMode === 'workspaces') {
+        e.preventDefault();
+        this.weSaveCurrentFile();
+      }
       // Ctrl+K / Cmd+K - Quick Switcher
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
@@ -1964,8 +2013,35 @@ class CWMApp {
 
     await this.loadSessions();
 
+    // Evict any terminal panes whose session no longer exists or is hidden.
+    // loadTerminalLayout() runs concurrently with loadAll() so sessions aren't
+    // available yet when panes are first restored — this is the authoritative cleanup.
+    this._evictStalePanes();
+
     // Apply settings (CSS classes, visibility) after initial data is loaded
     this.applySettings();
+  }
+
+  _evictStalePanes() {
+    const knownIds = new Set((this.state.allSessions || []).map(s => s.id));
+    // Close any live terminal pane whose session is gone or hidden
+    this.terminalPanes.forEach((tp, idx) => {
+      if (tp && tp.sessionId) {
+        if (!knownIds.has(tp.sessionId) || this.state.hiddenSessions.has(tp.sessionId)) {
+          this.closeTerminalPane(idx);
+        }
+      }
+    });
+    // Remove stale entries from the layout so they don't come back on next reload
+    let layoutDirty = false;
+    this._tabGroups.forEach(g => {
+      const before = (g.panes || []).length;
+      g.panes = (g.panes || []).filter(p =>
+        !p.sessionId || (knownIds.has(p.sessionId) && !this.state.hiddenSessions.has(p.sessionId))
+      );
+      if (g.panes.length !== before) layoutDirty = true;
+    });
+    if (layoutDirty) this.saveTerminalLayout();
   }
 
   async loadWorkspaces() {
@@ -2473,6 +2549,20 @@ class CWMApp {
     // Hide session - never delete. Persisted in localStorage.
     this.state.hiddenSessions.add(id);
     localStorage.setItem('cwm_hiddenSessions', JSON.stringify([...this.state.hiddenSessions]));
+
+    // Remove from terminal layout so it doesn't reopen on reload
+    let layoutDirty = false;
+    this._tabGroups.forEach(g => {
+      const before = (g.panes || []).length;
+      g.panes = (g.panes || []).filter(p => p.sessionId !== id);
+      if (g.panes.length !== before) layoutDirty = true;
+    });
+    if (layoutDirty) this.saveTerminalLayout();
+
+    // Close any live terminal pane that has this session open
+    this.terminalPanes.forEach((tp, idx) => {
+      if (tp && tp.sessionId === id) this.closeTerminalPane(idx);
+    });
 
     if (this.state.selectedSession && this.state.selectedSession.id === id) {
       this.deselectSession();
@@ -5907,14 +5997,15 @@ class CWMApp {
       this._resourcesInterval = null;
     }
 
-    // Toggle terminal grid vs session panels vs docs vs resources vs costs vs tasks
+    // Toggle terminal grid vs session panels vs docs vs resources vs costs vs tasks vs workspaces editor
     const isTerminal = mode === 'terminal';
     const isDocs = mode === 'docs';
     const isResources = mode === 'resources';
     const isCosts = mode === 'costs';
     const isTasks = mode === 'tasks';
-    this.els.sessionListPanel.hidden = isTerminal || isDocs || isResources || isCosts || isTasks;
-    this.els.detailPanel.hidden = isTerminal || isDocs || isResources || isCosts || isTasks || !this.state.selectedSession;
+    const isWorkspacesEditor = mode === 'workspaces';
+    this.els.sessionListPanel.hidden = isTerminal || isDocs || isResources || isCosts || isTasks || isWorkspacesEditor;
+    this.els.detailPanel.hidden = isTerminal || isDocs || isResources || isCosts || isTasks || isWorkspacesEditor || !this.state.selectedSession;
     if (this.els.terminalGrid) {
       this.els.terminalGrid.hidden = !isTerminal;
     }
@@ -5943,8 +6034,15 @@ class CWMApp {
     if (this.els.tasksPanel) {
       this.els.tasksPanel.hidden = !isTasks;
     }
+    if (this.els.workspacesEditorPanel) {
+      this.els.workspacesEditorPanel.hidden = !isWorkspacesEditor;
+    }
 
-    if (isTasks) {
+    if (isWorkspacesEditor) {
+      this.initWorkspacesEditor();
+      // Refresh dropdown on every activation in case workspaces loaded after first init
+      this._wePopulateWorkspaceDropdown();
+    } else if (isTasks) {
       this.renderTasksView();
     } else if (isDocs) {
       this.loadDocs();
@@ -9324,6 +9422,7 @@ class CWMApp {
     }
 
     this.updateTerminalGridLayout();
+    this.saveTerminalLayout();
 
     // Update mobile terminal tab strip
     if (this.isMobile) {
@@ -11038,7 +11137,7 @@ class CWMApp {
     const group = this._tabGroups.find(g => g.id === this._activeGroupId);
     if (group && group.panes && group.panes.length > 0) {
       group.panes.forEach(p => {
-        if (p.sessionId) {
+        if (p.sessionId && !this.state.hiddenSessions.has(p.sessionId)) {
           this.openTerminalInPane(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
         }
       });
@@ -15483,6 +15582,741 @@ class CWMApp {
     const tabs = this.els.terminalTabStrip.querySelectorAll('.terminal-tab');
     tabs.forEach((tab, i) => {
       tab.classList.toggle('active', i === this._activeTerminalSlot);
+    });
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     WORKSPACES EDITOR
+     ═══════════════════════════════════════════════════════════ */
+
+  /** Idempotent: called each time the Workspaces tab is activated. */
+  initWorkspacesEditor() {
+    if (this._we.initialized) return;
+    this._we.initialized = true;
+
+    this._wePopulateWorkspaceDropdown();
+
+    this.els.weWorkspaceSelect.addEventListener('change', () => {
+      const wsId = this.els.weWorkspaceSelect.value;
+      this._we.selectedWorkspaceId = wsId;
+      this._wePopulateSessionList(wsId);
+    });
+
+    this.els.weSaveBtn.addEventListener('click', () => this.weSaveCurrentFile());
+
+    this.els.weGitToggleBtn.addEventListener('click', () => {
+      this._we.gitCollapsed = !this._we.gitCollapsed;
+      this.els.weGitPanel.classList.toggle('collapsed', this._we.gitCollapsed);
+    });
+
+    this.els.weGitCollapseBtn.addEventListener('click', () => {
+      this._we.gitCollapsed = !this._we.gitCollapsed;
+      this.els.weGitPanel.classList.toggle('collapsed', this._we.gitCollapsed);
+    });
+
+    this.els.weGitRefreshBtn.addEventListener('click', () => this.weLoadGitStatus());
+    this.els.weGitPushBtn.addEventListener('click', () => this.wePush());
+    this.els.weGitPrBtn.addEventListener('click', () => this.weShowPrDialog());
+    this.els.weGitCommitBtn.addEventListener('click', () => this.weCommit());
+
+    this.els.weGitStageAllBtn.addEventListener('click', () => {
+      if (!this._we.gitStatus) return;
+      const files = [
+        ...this._we.gitStatus.unstaged.map(f => f.file),
+        ...this._we.gitStatus.untracked.map(f => f.file),
+      ];
+      if (files.length) this.weStageFiles(files);
+    });
+
+    this.els.weGitUnstageAllBtn.addEventListener('click', () => {
+      if (!this._we.gitStatus) return;
+      const files = this._we.gitStatus.staged.map(f => f.file);
+      if (files.length) this.weUnstageFiles(files);
+    });
+
+    this.weBindResizeHandle();
+
+    this._we.gitCollapsed = true;
+    this.els.weGitPanel.classList.add('collapsed');
+  }
+
+  /** Populate the workspace dropdown from this.state.workspaces */
+  _wePopulateWorkspaceDropdown() {
+    const select = this.els.weWorkspaceSelect;
+    while (select.options.length > 1) select.remove(1);
+    const workspaces = this.state.workspaces || [];
+    for (const ws of workspaces) {
+      const opt = document.createElement('option');
+      opt.value = ws.id;
+      opt.textContent = ws.name || ws.id;
+      select.appendChild(opt);
+    }
+    if (workspaces.length === 1) {
+      select.value = workspaces[0].id;
+      this._we.selectedWorkspaceId = workspaces[0].id;
+      this._wePopulateSessionList(workspaces[0].id);
+    }
+  }
+
+  /** Populate session list for a workspace */
+  _wePopulateSessionList(workspaceId) {
+    const container = this.els.weSessionList;
+    container.innerHTML = '';
+    const allSessions = this.state.allSessions || this.state.sessions || [];
+    const sessions = workspaceId
+      ? allSessions.filter(s => s.workspaceId === workspaceId && s.workingDir)
+      : allSessions.filter(s => s.workingDir);
+
+    if (sessions.length === 0) {
+      const hint = document.createElement('div');
+      hint.className = 'we-tree-empty';
+      hint.textContent = 'No sessions with working directories';
+      container.appendChild(hint);
+      return;
+    }
+
+    for (const s of sessions) {
+      const item = document.createElement('div');
+      item.className = 'we-session-item';
+      if (s.id === this._we.selectedSessionId) item.classList.add('active');
+
+      const dot = document.createElement('span');
+      dot.className = 'we-session-item-dot';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'we-session-item-name';
+      nameSpan.title = s.name || s.id;
+      nameSpan.textContent = s.name || s.id;
+
+      const dirName = s.workingDir ? (s.workingDir.split('/').pop() || s.workingDir) : '';
+      const dirSpan = document.createElement('span');
+      dirSpan.className = 'we-session-item-dir';
+      dirSpan.title = s.workingDir || '';
+      dirSpan.textContent = dirName;
+
+      item.appendChild(dot);
+      item.appendChild(nameSpan);
+      item.appendChild(dirSpan);
+
+      item.addEventListener('click', () => {
+        this._we.selectedSessionId = s.id;
+        this._we.selectedSessionDir = s.workingDir;
+        container.querySelectorAll('.we-session-item').forEach(el => el.classList.remove('active'));
+        item.classList.add('active');
+        this.weLoadTree(s.workingDir);
+        this.weLoadGitStatus();
+      });
+      container.appendChild(item);
+    }
+  }
+
+  /** Lazy-load CM6 script tags once; returns Promise */
+  async _weLoadCodeMirror() {
+    if (this._we.cmLoaded) return;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/vendor/codemirror/cm6-all.min.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load CM6'));
+      document.head.appendChild(s);
+    });
+    this._we.cmLoaded = true;
+  }
+
+  /** Map file extension to a CM6 language extension */
+  weGetLanguage(filename) {
+    if (!window.CM6Lang) return null;
+    const ext = (filename.split('.').pop() || '').toLowerCase();
+    const map = {
+      js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+      ts: 'javascript', tsx: 'javascript', jsx: 'javascript',
+      py: 'python', css: 'css', scss: 'css', less: 'css',
+      html: 'html', htm: 'html', json: 'json', jsonc: 'json',
+      md: 'markdown', mdx: 'markdown',
+      svelte: 'svelte',
+    };
+    const lang = map[ext];
+    if (!lang || !CM6Lang[lang]) return null;
+    const opts = (ext === 'ts' || ext === 'tsx') ? { typescript: true }
+      : (ext === 'jsx' ? { jsx: true } : {});
+    try { return CM6Lang[lang](opts); } catch { return CM6Lang[lang](); }
+  }
+
+  /** Create a new EditorView in the editor container */
+  weCreateEditor(content, lang) {
+    this.weDestroyEditor();
+    if (!window.CM6) return;
+    const { EditorView, EditorState, basicSetup, Compartment, syntaxHighlighting, HighlightStyle, tags } = CM6;
+    const langCompartment = new Compartment();
+
+    // Theme-aware syntax highlighting — all colors are CSS variables so they
+    // automatically follow whichever app theme is active (no JS wiring needed).
+    const weHighlight = HighlightStyle.define([
+      { tag: tags.keyword,            color: 'var(--mauve)', fontWeight: 'bold' },
+      { tag: tags.controlKeyword,     color: 'var(--mauve)', fontWeight: 'bold' },
+      { tag: tags.definitionKeyword,  color: 'var(--mauve)' },
+      { tag: tags.moduleKeyword,      color: 'var(--mauve)' },
+      { tag: tags.operatorKeyword,    color: 'var(--mauve)' },
+      { tag: tags.self,               color: 'var(--mauve)' },
+      { tag: tags.null,               color: 'var(--mauve)' },
+      { tag: tags.bool,               color: 'var(--mauve)' },
+      { tag: tags.string,             color: 'var(--green)' },
+      { tag: tags.special(tags.string), color: 'var(--teal)' },
+      { tag: tags.regexp,             color: 'var(--teal)' },
+      { tag: tags.number,             color: 'var(--peach)' },
+      { tag: tags.integer,            color: 'var(--peach)' },
+      { tag: tags.float,              color: 'var(--peach)' },
+      { tag: tags.comment,            color: 'var(--overlay1)', fontStyle: 'italic' },
+      { tag: tags.lineComment,        color: 'var(--overlay1)', fontStyle: 'italic' },
+      { tag: tags.blockComment,       color: 'var(--overlay1)', fontStyle: 'italic' },
+      { tag: tags.docComment,         color: 'var(--overlay1)', fontStyle: 'italic' },
+      { tag: tags.className,          color: 'var(--yellow)' },
+      { tag: tags.typeName,           color: 'var(--yellow)' },
+      { tag: tags.namespace,          color: 'var(--yellow)' },
+      { tag: tags.function(tags.variableName), color: 'var(--blue)' },
+      { tag: tags.function(tags.propertyName), color: 'var(--blue)' },
+      { tag: tags.propertyName,       color: 'var(--text)' },
+      { tag: tags.variableName,       color: 'var(--text)' },
+      { tag: tags.definition(tags.variableName), color: 'var(--text)' },
+      { tag: tags.definition(tags.function(tags.variableName)), color: 'var(--blue)' },
+      { tag: tags.tagName,            color: 'var(--red)' },
+      { tag: tags.attributeName,      color: 'var(--peach)' },
+      { tag: tags.attributeValue,     color: 'var(--green)' },
+      { tag: tags.operator,           color: 'var(--sky)' },
+      { tag: tags.punctuation,        color: 'var(--overlay1)' },
+      { tag: tags.bracket,            color: 'var(--overlay1)' },
+      { tag: tags.angleBracket,       color: 'var(--overlay1)' },
+      { tag: tags.escape,             color: 'var(--teal)' },
+      { tag: tags.meta,               color: 'var(--overlay1)' },
+      { tag: tags.invalid,            color: 'var(--red)', textDecoration: 'underline' },
+    ]);
+
+    const extensions = [
+      // Our highlight style goes first; basicSetup's defaultHighlightStyle has
+      // {fallback: true} so it only fills gaps our style doesn't cover.
+      syntaxHighlighting(weHighlight),
+      basicSetup,
+      EditorView.theme({
+        '&': { background: 'var(--base)', color: 'var(--text)', height: '100%' },
+        '.cm-scroller': { overflow: 'auto', height: '100%' },
+        '.cm-gutters': { background: 'var(--mantle)', borderRight: '1px solid var(--surface0)' },
+        '.cm-activeLineGutter': { background: 'var(--surface0)' },
+        '.cm-activeLine': { background: 'color-mix(in srgb, var(--surface0) 40%, transparent)' },
+        '.cm-cursor': { borderLeftColor: 'var(--text)' },
+        '.cm-selectionBackground': { background: 'color-mix(in srgb, var(--mauve) 20%, transparent)' },
+        '&.cm-focused .cm-selectionBackground': { background: 'color-mix(in srgb, var(--mauve) 28%, transparent)' },
+        '.cm-matchingBracket': { background: 'color-mix(in srgb, var(--mauve) 25%, transparent)', outline: '1px solid var(--mauve)' },
+        '.cm-searchMatch': { background: 'color-mix(in srgb, var(--yellow) 30%, transparent)', outline: '1px solid var(--yellow)' },
+        '.cm-searchMatch.cm-searchMatch-selected': { background: 'color-mix(in srgb, var(--peach) 40%, transparent)' },
+        '.cm-foldPlaceholder': { background: 'var(--surface1)', color: 'var(--overlay1)', border: '1px solid var(--surface2)' },
+        '.cm-tooltip': { background: 'var(--surface0)', border: '1px solid var(--surface1)', color: 'var(--text)' },
+        '.cm-completionIcon': { color: 'var(--mauve)' },
+      }),
+      langCompartment.of(lang || []),
+      EditorView.updateListener.of(update => {
+        if (update.docChanged && this._we.activeTabIndex >= 0) {
+          const tab = this._we.openTabs[this._we.activeTabIndex];
+          if (tab) {
+            tab.modified = true;
+            this.weUpdateTabs();
+            this.els.weSaveBtn.disabled = false;
+          }
+        }
+      }),
+    ];
+
+    const view = new EditorView({
+      state: EditorState.create({ doc: content, extensions }),
+      parent: this.els.weEditorContainer,
+    });
+    this._we.cmView = view;
+    this._we.langCompartment = langCompartment;
+    this.els.weEditorContainer.classList.add('has-editor');
+    this.els.weUndoBtn.disabled = false;
+    this.els.weRedoBtn.disabled = false;
+  }
+
+  /** Destroy the current EditorView */
+  weDestroyEditor() {
+    if (this._we.cmView) {
+      this._we.cmView.destroy();
+      this._we.cmView = null;
+    }
+    this.els.weEditorContainer.classList.remove('has-editor');
+    this.els.weSaveBtn.disabled = true;
+    this.els.weUndoBtn.disabled = true;
+    this.els.weRedoBtn.disabled = true;
+  }
+
+  /** Fetch directory tree and render it */
+  async weLoadTree(dir) {
+    const body = this.els.weTreeBody;
+    body.innerHTML = '';
+    const loading = document.createElement('div');
+    loading.className = 'we-tree-empty';
+    loading.textContent = 'Loading\u2026';
+    body.appendChild(loading);
+    try {
+      const data = await this.api('GET', '/api/fs/tree?path=' + encodeURIComponent(dir) + '&depth=3');
+      body.innerHTML = '';
+      this.weRenderTree(data.nodes || [], body, 0, dir);
+    } catch (err) {
+      body.innerHTML = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'we-tree-empty';
+      errEl.textContent = 'Error: ' + err.message;
+      body.appendChild(errEl);
+    }
+  }
+
+  /** Recursively build tree DOM using safe methods */
+  weRenderTree(nodes, parentEl, depth, rootDir) {
+    for (const node of nodes) {
+      const row = document.createElement('div');
+      row.className = 'we-tree-node';
+      row.dataset.path = node.path;
+      row.dataset.type = node.type;
+
+      const indent = document.createElement('span');
+      indent.className = 'we-tree-node-indent';
+      indent.style.width = (depth * 14) + 'px';
+
+      const toggle = document.createElement('span');
+      toggle.className = 'we-tree-node-toggle';
+      toggle.textContent = node.type === 'directory' ? '\u25B6' : '';
+
+      const icon = document.createElement('span');
+      icon.className = 'we-tree-node-icon';
+      icon.textContent = this.weFileIcon(node.name, node.type);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'we-tree-node-name';
+      nameSpan.title = node.path;
+      nameSpan.textContent = node.name;
+
+      row.appendChild(indent);
+      row.appendChild(toggle);
+      row.appendChild(icon);
+      row.appendChild(nameSpan);
+
+      if (node.gitStatus && node.gitStatus.trim()) {
+        const badge = this._weGitBadge(node.gitStatus);
+        if (badge) row.appendChild(badge);
+      }
+
+      if (node.type === 'directory') {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'we-tree-children';
+        childContainer.dataset.dir = node.path;
+
+        row.addEventListener('click', async () => {
+          const expanded = this._we.treeExpandedDirs.has(node.path);
+          if (expanded) {
+            this._we.treeExpandedDirs.delete(node.path);
+            toggle.classList.remove('expanded');
+            childContainer.classList.remove('expanded');
+          } else {
+            this._we.treeExpandedDirs.add(node.path);
+            toggle.classList.add('expanded');
+            if (node.children === null) {
+              childContainer.innerHTML = '';
+              const ph = document.createElement('div');
+              ph.className = 'we-tree-node';
+              ph.style.opacity = '0.5';
+              ph.style.pointerEvents = 'none';
+              ph.textContent = 'Loading\u2026';
+              childContainer.appendChild(ph);
+              childContainer.classList.add('expanded');
+              try {
+                const data = await this.api('GET', '/api/fs/tree?path=' + encodeURIComponent(node.path) + '&depth=1');
+                childContainer.innerHTML = '';
+                this.weRenderTree(data.nodes || [], childContainer, depth + 1, rootDir);
+              } catch (e) {
+                childContainer.innerHTML = '';
+                const errEl = document.createElement('div');
+                errEl.className = 'we-tree-node';
+                errEl.textContent = 'Error: ' + e.message;
+                childContainer.appendChild(errEl);
+              }
+            } else {
+              childContainer.classList.add('expanded');
+            }
+          }
+        });
+
+        if (node.children && node.children.length > 0) {
+          this.weRenderTree(node.children, childContainer, depth + 1, rootDir);
+        }
+
+        parentEl.appendChild(row);
+        parentEl.appendChild(childContainer);
+      } else {
+        row.addEventListener('click', () => this.weOpenFile(node.path));
+        parentEl.appendChild(row);
+      }
+    }
+  }
+
+  /** Return a colored git status badge element */
+  _weGitBadge(xy) {
+    if (!xy || !xy.trim()) return null;
+    const x = xy[0], y = xy[1] || ' ';
+    const badge = document.createElement('span');
+    badge.className = 'we-tree-node-git';
+    if (x === '?' && y === '?') { badge.classList.add('untracked'); badge.textContent = 'U'; return badge; }
+    if (x === 'A') { badge.classList.add('added'); badge.textContent = 'A'; return badge; }
+    if (x === 'D' || y === 'D') { badge.classList.add('deleted'); badge.textContent = 'D'; return badge; }
+    if (x !== ' ' || y === 'M') { badge.classList.add('modified'); badge.textContent = 'M'; return badge; }
+    return null;
+  }
+
+  /** Return an emoji icon string for a file */
+  weFileIcon(name, type) {
+    if (type === 'directory') return '\uD83D\uDCC1';
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    const icons = {
+      js: '\uD83D\uDFE8', mjs: '\uD83D\uDFE8', cjs: '\uD83D\uDFE8',
+      ts: '\uD83D\uDD37', tsx: '\uD83D\uDD37',
+      py: '\uD83D\uDC0D', html: '\uD83C\uDF10', htm: '\uD83C\uDF10',
+      css: '\uD83C\uDFA8', scss: '\uD83C\uDFA8',
+      json: '\uD83D\uDCCB', jsonc: '\uD83D\uDCCB',
+      md: '\uD83D\uDCDD', mdx: '\uD83D\uDCDD',
+      svelte: '\uD83D\uDD25',
+      sh: '\u2699\uFE0F', bash: '\u2699\uFE0F', zsh: '\u2699\uFE0F',
+      rs: '\uD83E\uDD80', go: '\uD83D\uDC39',
+      yaml: '\u2699\uFE0F', yml: '\u2699\uFE0F', toml: '\u2699\uFE0F',
+    };
+    return icons[ext] || (name.startsWith('.') ? '\uD83D\uDD38' : '\uD83D\uDCC4');
+  }
+
+  /** Open a file: fetch content, add/focus tab, mount editor */
+  async weOpenFile(filePath) {
+    const existingIdx = this._we.openTabs.findIndex(t => t.path === filePath);
+    if (existingIdx >= 0) { this._weActivateTab(existingIdx); return; }
+
+    try { await this._weLoadCodeMirror(); } catch (e) {
+      this.showToast('Failed to load editor: ' + e.message, 'error'); return;
+    }
+
+    try {
+      const data = await this.api('GET', '/api/fs/file?path=' + encodeURIComponent(filePath));
+      const name = filePath.split('/').pop();
+      const lang = this.weGetLanguage(name);
+      this._we.openTabs.push({ path: filePath, name, content: data.content, modified: false, lang });
+      this._weActivateTab(this._we.openTabs.length - 1);
+      this.els.weTreeBody.querySelectorAll('.we-tree-node').forEach(n => {
+        n.classList.toggle('active', n.dataset.path === filePath);
+      });
+    } catch (err) {
+      this.showToast('Cannot open file: ' + err.message, 'error');
+    }
+  }
+
+  /** Activate a tab by index, mounting the editor */
+  _weActivateTab(idx) {
+    this._we.activeTabIndex = idx;
+    const tab = this._we.openTabs[idx];
+    if (!tab) return;
+    this.weCreateEditor(tab.content, tab.lang);
+    this.weUpdateTabs();
+    this.els.weSaveBtn.disabled = !tab.modified;
+  }
+
+  /** Re-render the tab strip using safe DOM methods */
+  weUpdateTabs() {
+    const container = this.els.weTabs;
+    container.innerHTML = '';
+    this._we.openTabs.forEach((tab, i) => {
+      const el = document.createElement('button');
+      el.className = 'we-tab' +
+        (i === this._we.activeTabIndex ? ' active' : '') +
+        (tab.modified ? ' we-tab-modified' : '');
+      el.setAttribute('role', 'tab');
+      el.setAttribute('aria-selected', String(i === this._we.activeTabIndex));
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'we-tab-name';
+      nameSpan.title = tab.path;
+      nameSpan.textContent = tab.name;
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'we-tab-close';
+      closeBtn.title = 'Close';
+      closeBtn.textContent = '\xD7';
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._weCloseTab(i);
+      });
+
+      el.appendChild(nameSpan);
+      el.appendChild(closeBtn);
+      el.addEventListener('click', () => this._weActivateTab(i));
+      container.appendChild(el);
+    });
+  }
+
+  /** Close a tab by index */
+  _weCloseTab(idx) {
+    this._we.openTabs.splice(idx, 1);
+    if (this._we.openTabs.length === 0) {
+      this._we.activeTabIndex = -1;
+      this.weDestroyEditor();
+      this.weUpdateTabs();
+    } else {
+      this._weActivateTab(Math.min(idx, this._we.openTabs.length - 1));
+    }
+  }
+
+  /** Save the currently active file */
+  async weSaveCurrentFile() {
+    const idx = this._we.activeTabIndex;
+    if (idx < 0) return;
+    const tab = this._we.openTabs[idx];
+    if (!tab) return;
+    const content = this._we.cmView ? this._we.cmView.state.doc.toString() : tab.content;
+    try {
+      await this.api('PUT', '/api/fs/file', { path: tab.path, content });
+      tab.content = content;
+      tab.modified = false;
+      this.weUpdateTabs();
+      this.els.weSaveBtn.disabled = true;
+      this.showToast('Saved ' + tab.name, 'success');
+    } catch (err) {
+      this.showToast('Save failed: ' + err.message, 'error');
+    }
+  }
+
+  /** Fetch git status and render the git panel */
+  async weLoadGitStatus() {
+    const dir = this._we.selectedSessionDir;
+    if (!dir) return;
+    try {
+      const status = await this.api('GET', '/api/git/status-detailed?dir=' + encodeURIComponent(dir));
+      this._we.gitStatus = status;
+      this.weRenderGitPanel(status);
+    } catch {
+      this.weRenderGitPanel(null);
+    }
+  }
+
+  /** Render the git panel with staged/unstaged/untracked files */
+  weRenderGitPanel(status) {
+    if (!status) {
+      this.els.weGitBranch.textContent = '';
+      this.els.weGitAheadBehind.textContent = '';
+      const hint = document.createElement('span');
+      hint.className = 'we-git-empty-hint';
+      hint.textContent = 'Not a git repo';
+      this.els.weGitStagedFiles.innerHTML = '';
+      this.els.weGitStagedFiles.appendChild(hint.cloneNode(true));
+      this.els.weGitUnstagedFiles.innerHTML = '';
+      this.els.weGitUnstagedFiles.appendChild(hint.cloneNode(true));
+      return;
+    }
+
+    this.els.weGitBranch.textContent = status.branch ? '  ' + status.branch : '';
+    const ahead = status.ahead || 0, behind = status.behind || 0;
+    this.els.weGitAheadBehind.textContent = (ahead || behind) ? ('  \u2191' + ahead + ' \u2193' + behind) : '';
+
+    const stagedEl = this.els.weGitStagedFiles;
+    stagedEl.innerHTML = '';
+    if (!status.staged.length) {
+      const hint = document.createElement('span');
+      hint.className = 'we-git-empty-hint';
+      hint.textContent = 'No staged changes';
+      stagedEl.appendChild(hint);
+    } else {
+      status.staged.forEach(f => stagedEl.appendChild(this._weGitFileRow(f, true)));
+    }
+
+    const unstagedEl = this.els.weGitUnstagedFiles;
+    unstagedEl.innerHTML = '';
+    const changes = [
+      ...(status.unstaged || []),
+      ...(status.untracked || []).map(u => ({ file: u.file, status: '?' })),
+    ];
+    if (!changes.length) {
+      const hint = document.createElement('span');
+      hint.className = 'we-git-empty-hint';
+      hint.textContent = 'No changes';
+      unstagedEl.appendChild(hint);
+    } else {
+      changes.forEach(f => unstagedEl.appendChild(this._weGitFileRow(f, false)));
+    }
+  }
+
+  /** Build a git file row using safe DOM methods */
+  _weGitFileRow(f, isStaged) {
+    const row = document.createElement('div');
+    row.className = 'we-git-file-row';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = true;
+
+    const statusEl = document.createElement('span');
+    statusEl.className = 'we-git-file-status ' + (f.status || '?');
+    statusEl.textContent = f.status || '?';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'we-git-file-name';
+    nameEl.title = f.file;
+    nameEl.textContent = f.file;
+
+    const diffBtn = document.createElement('button');
+    diffBtn.className = 'we-git-file-diff-btn';
+    diffBtn.title = 'View diff';
+    diffBtn.textContent = 'diff';
+    diffBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.weShowDiff(f.file, isStaged);
+    });
+
+    row.appendChild(cb);
+    row.appendChild(statusEl);
+    row.appendChild(nameEl);
+    row.appendChild(diffBtn);
+
+    row.addEventListener('click', (e) => {
+      if (e.target === cb || e.target === diffBtn) return;
+      if (isStaged) this.weUnstageFiles([f.file]);
+      else this.weStageFiles([f.file]);
+    });
+    return row;
+  }
+
+  /** Show a diff view for a file in the editor */
+  async weShowDiff(filePath, staged) {
+    const dir = this._we.selectedSessionDir;
+    if (!dir) return;
+    try {
+      await this._weLoadCodeMirror();
+      const data = await this.api('GET',
+        '/api/git/diff-file?dir=' + encodeURIComponent(dir) +
+        '&file=' + encodeURIComponent(filePath) +
+        '&staged=' + staged
+      );
+      if (!data.diff) { this.showToast('No diff available', 'info'); return; }
+      const name = 'diff: ' + filePath.split('/').pop();
+      this._we.openTabs.push({ path: '__diff__' + filePath, name, content: data.diff, modified: false, lang: null });
+      this._weActivateTab(this._we.openTabs.length - 1);
+    } catch (err) {
+      this.showToast('Diff failed: ' + err.message, 'error');
+    }
+  }
+
+  /** Stage files and refresh git status */
+  async weStageFiles(files) {
+    const dir = this._we.selectedSessionDir;
+    if (!dir || !files.length) return;
+    try {
+      await this.api('POST', '/api/git/stage', { dir, files });
+      await this.weLoadGitStatus();
+    } catch (err) {
+      this.showToast('Stage failed: ' + err.message, 'error');
+    }
+  }
+
+  /** Unstage files and refresh git status */
+  async weUnstageFiles(files) {
+    const dir = this._we.selectedSessionDir;
+    if (!dir || !files.length) return;
+    try {
+      await this.api('POST', '/api/git/unstage', { dir, files });
+      await this.weLoadGitStatus();
+    } catch (err) {
+      this.showToast('Unstage failed: ' + err.message, 'error');
+    }
+  }
+
+  /** Commit staged changes */
+  async weCommit() {
+    const dir = this._we.selectedSessionDir;
+    const message = this.els.weGitCommitMsg.value.trim();
+    if (!dir) { this.showToast('No session selected', 'error'); return; }
+    if (!message) { this.showToast('Enter a commit message', 'error'); return; }
+    try {
+      const res = await this.api('POST', '/api/git/commit', { dir, message });
+      this.els.weGitCommitMsg.value = '';
+      this.showToast('Committed ' + (res.hash || ''), 'success');
+      await this.weLoadGitStatus();
+    } catch (err) {
+      this.showToast('Commit failed: ' + err.message, 'error');
+    }
+  }
+
+  /** Push to remote */
+  async wePush() {
+    const dir = this._we.selectedSessionDir;
+    if (!dir) { this.showToast('No session selected', 'error'); return; }
+    this.els.weGitPushBtn.disabled = true;
+    this.els.weGitPushBtn.textContent = 'Pushing\u2026';
+    try {
+      await this.api('POST', '/api/git/push', { dir });
+      this.showToast('Pushed successfully', 'success');
+      await this.weLoadGitStatus();
+    } catch (err) {
+      this.showToast('Push failed: ' + err.message, 'error');
+    } finally {
+      this.els.weGitPushBtn.disabled = false;
+      this.els.weGitPushBtn.textContent = 'Push';
+    }
+  }
+
+  /** Show the Create PR modal */
+  async weShowPrDialog() {
+    const dir = this._we.selectedSessionDir;
+    if (!dir) { this.showToast('No session selected', 'error'); return; }
+    const branch = this._we.gitStatus?.branch || 'HEAD';
+    const result = await this.showPromptModal({
+      title: 'Create Pull Request',
+      fields: [
+        { key: 'title', label: 'Title', placeholder: 'PR title\u2026', value: branch, required: true },
+        { key: 'base', label: 'Base branch', placeholder: 'main', value: 'main' },
+        { key: 'body', label: 'Description', type: 'textarea', placeholder: 'PR description (optional)\u2026' },
+      ],
+      confirmText: 'Create PR',
+    });
+    if (!result) return;
+    const title = result.title?.trim();
+    const base = result.base?.trim() || 'main';
+    const body = result.body?.trim() || '';
+    if (!title) return;
+    try {
+      const res = await this.api('POST', '/api/git/pr-create', { dir, title, body, base });
+      this.showToast(res.url ? 'PR created: ' + res.url : 'PR created', 'success');
+    } catch (err) {
+      this.showToast('PR creation failed: ' + err.message, 'error');
+    }
+  }
+
+  /** Drag-to-resize for the tree panel */
+  weBindResizeHandle() {
+    const handle = this.els.weResizeHandle;
+    const panel = this.els.weTreePanel;
+    if (!handle || !panel) return;
+    let startX = 0, startW = 0, dragging = false;
+
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      startX = e.clientX;
+      startW = panel.getBoundingClientRect().width;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      panel.style.width = Math.max(180, Math.min(480, startW + (e.clientX - startX))) + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     });
   }
 }
