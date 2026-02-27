@@ -2654,7 +2654,6 @@ class CWMApp {
   async startSession(id) {
     try {
       await this.api('POST', `/api/sessions/${id}/start`);
-      this.showToast('Session started', 'success');
       await this.refreshSessionData(id);
     } catch (err) {
       this.showToast(err.message || 'Failed to start session', 'error');
@@ -5691,7 +5690,6 @@ class CWMApp {
       }
       // Then start the session
       await this.api('POST', `/api/sessions/${sessionId}/start`);
-      this.showToast('Session started', 'success');
       await this.refreshSessionData(sessionId);
     } catch (err) {
       this.showToast(err.message || 'Failed to start session', 'error');

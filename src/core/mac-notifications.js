@@ -1,7 +1,10 @@
 /**
  * macOS Notification Center integration.
  *
- * Bridges NotificationManager events to native macOS notifications via osascript.
+ * Bridges NotificationManager events to native macOS notifications.
+ * - Inside Electron: uses Electron's Notification API so clicking the
+ *   notification focuses/restores the app window.
+ * - Standalone server: falls back to osascript.
  * No-op on non-darwin platforms.
  */
 
@@ -23,6 +26,20 @@ const LEVEL_META = {
  * @param {'info'|'success'|'warning'|'error'} [level]
  */
 function sendMacNotification(title, message, level) {
+  if (process.env.ELECTRON === '1') {
+    // Use Electron's Notification API — supports click to focus the window
+    const { Notification, BrowserWindow, app } = require('electron');
+    const meta = LEVEL_META[level] || LEVEL_META.info;
+    const n = new Notification({ title, body: message, subtitle: meta.subtitle });
+    n.on('click', () => {
+      app.focus({ steal: true });
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win) { win.show(); win.focus(); }
+    });
+    n.show();
+    return;
+  }
+
   const t = title.replace(/"/g, '\\"');
   const m = message.replace(/"/g, '\\"');
   const meta = LEVEL_META[level] || LEVEL_META.info;
