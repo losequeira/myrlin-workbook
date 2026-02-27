@@ -1390,6 +1390,11 @@ class CWMApp {
         const session = (this.state.allSessions || this.state.sessions).find(s => s.id === sessionId);
         if (!session) return;
         if (this.state.viewMode === 'terminal') {
+          const existingSlot = this.terminalPanes.findIndex(p => p && p.sessionId === sessionId);
+          if (existingSlot !== -1) {
+            this.setActiveTerminalPane(existingSlot);
+            return;
+          }
           const emptySlot = this.terminalPanes.findIndex(p => p === null);
           if (emptySlot !== -1) {
             if (!session.resumeSessionId) this.showToast('Starting new Claude session (no previous conversation to resume)', 'info');
@@ -2488,7 +2493,7 @@ class CWMApp {
       const emptySlot = this.terminalPanes.findIndex(p => p === null);
       if (emptySlot !== -1) {
         this.setViewMode('terminal');
-        const spawnOpts = { cwd: dir };
+        const spawnOpts = { cwd: dir, newSession: true };
         if (flags.bypassPermissions) spawnOpts.bypassPermissions = true;
         this.openTerminalInPane(emptySlot, session.id, session.name, spawnOpts);
       }
@@ -2866,6 +2871,12 @@ class CWMApp {
     // Sidebar-specific: Open in terminal
     items.push({
       label: 'Open in Terminal', icon: '&#9654;', action: () => {
+        const existingSlot = this.terminalPanes.findIndex(p => p && p.sessionId === sessionId);
+        if (existingSlot !== -1) {
+          this.setViewMode('terminal');
+          this.setActiveTerminalPane(existingSlot);
+          return;
+        }
         const emptySlot = this.terminalPanes.findIndex(p => p === null);
         if (emptySlot !== -1) {
           this.setViewMode('terminal');
@@ -9410,7 +9421,10 @@ class CWMApp {
     const sessionName = tp ? tp.sessionName : '';
 
     if (tp) {
-      // Dispose disconnects the WebSocket but the PTY keeps running in the background
+      const sessionId = tp.sessionId;
+      if (sessionId) {
+        this.api('POST', `/api/pty/${encodeURIComponent(sessionId)}/kill`).catch(() => {});
+      }
       tp.dispose();
       this.terminalPanes[slotIdx] = null;
     }
@@ -9468,7 +9482,7 @@ class CWMApp {
     }
 
     if (sessionName) {
-      this.showToast(`"${sessionName}" moved to background - drag it back to reconnect`, 'info');
+      this.showToast(`"${sessionName}" closed`, 'info');
     }
   }
 

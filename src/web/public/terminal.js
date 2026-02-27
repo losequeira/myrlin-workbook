@@ -354,6 +354,7 @@ class TerminalPane {
     this.sessionName = sessionName || 'Terminal';
     this.spawnOpts = spawnOpts || {}; // Extra params for PTY spawn (cwd, resumeSessionId, etc.)
     this.term = null;
+    this._lastCtrlCMs = 0; // Timestamp of last Ctrl+C for double-press detection
     this.fitAddon = null;
     this.ws = null;
     this.connected = false;
@@ -488,12 +489,25 @@ class TerminalPane {
         if (e.type !== 'keydown') return true;
         const mod = e.ctrlKey || e.metaKey;
 
-        // Ctrl+C / Cmd+C: copy selected text to clipboard (if selection exists)
-        // Without selection, fall through so xterm sends \x03 (SIGINT) normally
-        if (mod && e.key === 'c' && this.term.hasSelection()) {
-          navigator.clipboard.writeText(this.term.getSelection()).catch(() => {});
-          this.term.clearSelection();
-          return false;
+        // Ctrl+C / Cmd+C: copy selected text or send SIGINT / force-exit
+        if (mod && e.key === 'c') {
+          if (this.term.hasSelection()) {
+            // Copy selection to clipboard, don't send \x03 to PTY
+            navigator.clipboard.writeText(this.term.getSelection()).catch(() => {});
+            this.term.clearSelection();
+            return false;
+          }
+          // Double Ctrl+C within 600ms: force-exit Claude and drop to a plain shell
+          const now = Date.now();
+          if (now - this._lastCtrlCMs < 600) {
+            this._lastCtrlCMs = 0;
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({ type: 'force-exit' }));
+            }
+            return false; // swallow — server handles the exit
+          }
+          this._lastCtrlCMs = now;
+          return true; // let xterm send \x03 (SIGINT) normally on first press
         }
 
         // Ctrl+V / Cmd+V: paste from clipboard via WebSocket
@@ -626,6 +640,7 @@ class TerminalPane {
     if (this.spawnOpts.resumeSessionId) wsUrl += '&resumeSessionId=' + encodeURIComponent(this.spawnOpts.resumeSessionId);
     if (this.spawnOpts.command) wsUrl += '&command=' + encodeURIComponent(this.spawnOpts.command);
     if (this.spawnOpts.bypassPermissions) wsUrl += '&bypassPermissions=true';
+    if (this.spawnOpts.newSession) wsUrl += '&newSession=true';
     if (this.spawnOpts.verbose) wsUrl += '&verbose=true';
     if (this.spawnOpts.model) wsUrl += '&model=' + encodeURIComponent(this.spawnOpts.model);
     if (this.spawnOpts.shell) wsUrl += '&shell=' + encodeURIComponent(this.spawnOpts.shell);

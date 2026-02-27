@@ -84,6 +84,7 @@ function attachPtyWebSocket(httpServer) {
       if (query.command && isSafeCommand(query.command)) spawnOpts.command = query.command;
       if (query.resumeSessionId && isSafeSessionId(query.resumeSessionId)) spawnOpts.resumeSessionId = query.resumeSessionId;
       if (query.bypassPermissions === 'true') spawnOpts.bypassPermissions = true;
+      if (query.newSession === 'true') spawnOpts.newSession = true;
       if (query.verbose === 'true') spawnOpts.verbose = true;
       if (query.model && isSafeModel(query.model)) spawnOpts.model = query.model;
       if (query.shell && isSafeShell(query.shell)) spawnOpts.shell = query.shell;
