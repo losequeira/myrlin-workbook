@@ -1,0 +1,25 @@
+/* CodeMirror 6 base styles — vendored for Myrlin Workbook */
+.cm-editor{height:100%;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;font-size:13px;line-height:1.6}
+.cm-editor.cm-focused{outline:none}
+.cm-scroller{overflow:auto;height:100%}
+.cm-content{white-space:pre;padding:4px 0;min-height:100%;caret-color:var(--text,#cdd6f4)}
+.cm-line{padding:0 4px 0 6px}
+.cm-gutters{border-right:1px solid var(--surface1,#45475a);background:var(--base,#1e1e2e);color:var(--overlay0,#6c7086);user-select:none;flex-shrink:0}
+.cm-lineNumbers .cm-gutterElement{padding:0 8px 0 4px;min-width:2.5em;text-align:right;font-size:12px}
+.cm-foldGutter .cm-gutterElement{cursor:pointer;padding:0 4px}
+.cm-activeLine{background:rgba(88,91,112,0.12)}
+.cm-activeLineGutter{background:rgba(88,91,112,0.18)}
+.cm-cursor,.cm-dropCursor{border-left:2px solid var(--text,#cdd6f4)}
+.cm-selectionBackground,.cm-editor ::selection{background:rgba(147,153,178,.25)}
+.cm-editor.cm-focused .cm-selectionBackground{background:rgba(147,153,178,.3)}
+.cm-searchMatch{background:rgba(249,226,175,.25);outline:1px solid rgba(249,226,175,.4)}
+.cm-searchMatch.cm-searchMatch-selected{background:rgba(249,226,175,.5)}
+.cm-matchingBracket,.cm-nonmatchingBracket{background:rgba(166,227,161,.2)}
+.cm-tooltip{background:var(--surface0,#313244);border:1px solid var(--surface1,#45475a);border-radius:6px;padding:2px 0;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+.cm-tooltip-autocomplete ul{margin:0;padding:0;list-style:none;max-height:180px;overflow-y:auto}
+.cm-tooltip-autocomplete ul li{padding:3px 12px;cursor:pointer;font-size:12px;white-space:nowrap}
+.cm-tooltip-autocomplete ul li[aria-selected]{background:var(--surface1,#45475a);color:var(--text,#cdd6f4)}
+.cm-completionIcon{margin-right:6px;opacity:.7}
+.cm-panels{background:var(--mantle,#181825);color:var(--text,#cdd6f4)}
+.cm-panels.cm-panels-top{border-bottom:1px solid var(--surface0,#313244)}
+.cm-panels.cm-panels-bottom{border-top:1px solid var(--surface0,#313244)}
