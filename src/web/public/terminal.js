@@ -204,17 +204,147 @@ class TerminalPane {
     brightWhite: '#d8f0e8',
   };
 
+  static THEME_NORD = {
+    background: '#2e3440',
+    foreground: '#eceff4',
+    cursor: '#d8dee9',
+    cursorAccent: '#2e3440',
+    selectionBackground: 'rgba(129, 161, 193, 0.3)',
+    selectionForeground: '#eceff4',
+    black: '#3b4252',
+    red: '#bf616a',
+    green: '#a3be8c',
+    yellow: '#ebcb8b',
+    blue: '#81a1c1',
+    magenta: '#b48ead',
+    cyan: '#88c0d0',
+    white: '#d8dee9',
+    brightBlack: '#4c566a',
+    brightRed: '#bf616a',
+    brightGreen: '#a3be8c',
+    brightYellow: '#ebcb8b',
+    brightBlue: '#81a1c1',
+    brightMagenta: '#b48ead',
+    brightCyan: '#8fbcbb',
+    brightWhite: '#eceff4',
+  };
+
+  static THEME_DRACULA = {
+    background: '#282a36',
+    foreground: '#f8f8f2',
+    cursor: '#ff79c6',
+    cursorAccent: '#282a36',
+    selectionBackground: 'rgba(189, 147, 249, 0.3)',
+    selectionForeground: '#f8f8f2',
+    black: '#21222c',
+    red: '#ff5555',
+    green: '#50fa7b',
+    yellow: '#f1fa8c',
+    blue: '#bd93f9',
+    magenta: '#ff79c6',
+    cyan: '#8be9fd',
+    white: '#f8f8f2',
+    brightBlack: '#6272a4',
+    brightRed: '#ff6e6e',
+    brightGreen: '#69ff94',
+    brightYellow: '#ffffa5',
+    brightBlue: '#d6acff',
+    brightMagenta: '#ff92df',
+    brightCyan: '#a4ffff',
+    brightWhite: '#ffffff',
+  };
+
+  static THEME_TOKYO_NIGHT = {
+    background: '#1a1b26',
+    foreground: '#c0caf5',
+    cursor: '#7aa2f7',
+    cursorAccent: '#1a1b26',
+    selectionBackground: 'rgba(122, 162, 247, 0.3)',
+    selectionForeground: '#c0caf5',
+    black: '#15161e',
+    red: '#f7768e',
+    green: '#9ece6a',
+    yellow: '#e0af68',
+    blue: '#7aa2f7',
+    magenta: '#bb9af7',
+    cyan: '#7dcfff',
+    white: '#a9b1d6',
+    brightBlack: '#414868',
+    brightRed: '#f7768e',
+    brightGreen: '#9ece6a',
+    brightYellow: '#e0af68',
+    brightBlue: '#7aa2f7',
+    brightMagenta: '#bb9af7',
+    brightCyan: '#7dcfff',
+    brightWhite: '#c0caf5',
+  };
+
+  static THEME_ROSE_PINE_DAWN = {
+    background: '#faf4ed',
+    foreground: '#575279',
+    cursor: '#cecacd',
+    cursorAccent: '#faf4ed',
+    selectionBackground: 'rgba(144, 122, 169, 0.25)',
+    selectionForeground: '#575279',
+    black: '#f2e9e1',
+    red: '#b4637a',
+    green: '#56949f',
+    yellow: '#ea9d34',
+    blue: '#286983',
+    magenta: '#907aa9',
+    cyan: '#d7827e',
+    white: '#9893a5',
+    brightBlack: '#797593',
+    brightRed: '#b4637a',
+    brightGreen: '#56949f',
+    brightYellow: '#ea9d34',
+    brightBlue: '#286983',
+    brightMagenta: '#907aa9',
+    brightCyan: '#56949f',
+    brightWhite: '#575279',
+  };
+
+  static THEME_GRUVBOX_LIGHT = {
+    background: '#fbf1c7',
+    foreground: '#3c3836',
+    cursor: '#af3a03',
+    cursorAccent: '#fbf1c7',
+    selectionBackground: 'rgba(175, 58, 3, 0.2)',
+    selectionForeground: '#3c3836',
+    black: '#928374',
+    red: '#9d0006',
+    green: '#79740e',
+    yellow: '#b57614',
+    blue: '#076678',
+    magenta: '#8f3f71',
+    cyan: '#427b58',
+    white: '#7c6f64',
+    brightBlack: '#928374',
+    brightRed: '#cc241d',
+    brightGreen: '#98971a',
+    brightYellow: '#d79921',
+    brightBlue: '#458588',
+    brightMagenta: '#b16286',
+    brightCyan: '#689d6a',
+    brightWhite: '#3c3836',
+  };
+
   static getCurrentTheme() {
     const t = document.documentElement.dataset.theme;
     switch (t) {
-      case 'latte': return TerminalPane.THEME_LATTE;
-      case 'frappe': return TerminalPane.THEME_FRAPPE;
-      case 'macchiato': return TerminalPane.THEME_MACCHIATO;
-      case 'cherry': return TerminalPane.THEME_CHERRY;
-      case 'ocean': return TerminalPane.THEME_OCEAN;
-      case 'amber': return TerminalPane.THEME_AMBER;
-      case 'mint': return TerminalPane.THEME_MINT;
-      default: return TerminalPane.THEME_MOCHA;
+      case 'latte':          return TerminalPane.THEME_LATTE;
+      case 'frappe':         return TerminalPane.THEME_FRAPPE;
+      case 'macchiato':      return TerminalPane.THEME_MACCHIATO;
+      case 'nord':           return TerminalPane.THEME_NORD;
+      case 'dracula':        return TerminalPane.THEME_DRACULA;
+      case 'tokyo-night':    return TerminalPane.THEME_TOKYO_NIGHT;
+      case 'cherry':         return TerminalPane.THEME_CHERRY;
+      case 'ocean':          return TerminalPane.THEME_OCEAN;
+      case 'amber':          return TerminalPane.THEME_AMBER;
+      case 'mint':           return TerminalPane.THEME_MINT;
+      case 'rose-pine-dawn': return TerminalPane.THEME_ROSE_PINE_DAWN;
+      case 'gruvbox-light':  return TerminalPane.THEME_GRUVBOX_LIGHT;
+      default:               return TerminalPane.THEME_MOCHA;
     }
   }
 
@@ -368,8 +498,12 @@ class TerminalPane {
 
         // Ctrl+V / Cmd+V: paste from clipboard via WebSocket
         // Using explicit clipboard read instead of relying on browser paste event,
-        // which doesn't always fire reliably through xterm's hidden textarea
+        // which doesn't always fire reliably through xterm's hidden textarea.
+        // Set _suppressOnData before pasteFromClipboard() so when the browser
+        // fires the paste event synchronously after this keydown, xterm's onData
+        // call is suppressed. pasteFromClipboard() clears the flag when done.
         if (mod && e.key === 'v') {
+          this._suppressOnData = true;
           this.pasteFromClipboard();
           return false;
         }
@@ -419,6 +553,7 @@ class TerminalPane {
       }
 
       this.term.onData((data) => {
+        if (this._suppressOnData) return;
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: 'input', data }));
         }
@@ -626,7 +761,9 @@ class TerminalPane {
         const bracketedText = '\x1b[200~' + text + '\x1b[201~';
         this.ws.send(JSON.stringify({ type: 'input', data: bracketedText }));
       }
+      this._suppressOnData = false;
     } catch (err) {
+      this._suppressOnData = false;
       this._log('Clipboard paste failed: ' + err.message);
     }
     // Refocus the terminal after the async clipboard read completes.

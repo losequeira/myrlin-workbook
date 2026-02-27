@@ -9819,3 +9819,744 @@ html {
 .launcher-list::-webkit-scrollbar-thumb:hover {
   background: var(--overlay0);
 }
+
+/* ─────────────────────────────────────────────────────────
+   WORKSPACES EDITOR PANEL
+   ───────────────────────────────────────────────────────── */
+
+.workspaces-editor-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  background: var(--base);
+  min-height: 0;
+}
+
+/* ── Tree Panel ─────────────────────────────────────────── */
+
+.we-tree-panel {
+  width: 280px;
+  min-width: 180px;
+  max-width: 480px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--mantle);
+  border-right: 1px solid var(--surface0);
+  overflow: hidden;
+}
+
+.we-tree-header {
+  padding: 8px;
+  border-bottom: 1px solid var(--surface0);
+  flex-shrink: 0;
+}
+
+.we-workspace-select {
+  width: 100%;
+  background: var(--surface0);
+  color: var(--text);
+  border: 1px solid var(--surface1);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  outline: none;
+  cursor: pointer;
+}
+
+.we-workspace-select:focus {
+  border-color: var(--mauve);
+}
+
+.we-session-list {
+  flex-shrink: 0;
+  overflow-y: auto;
+  max-height: 140px;
+  border-bottom: 1px solid var(--surface0);
+}
+
+.we-session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--subtext1);
+  border-bottom: 1px solid var(--surface0);
+  user-select: none;
+  transition: background var(--transition-fast);
+}
+
+.we-session-item:last-child {
+  border-bottom: none;
+}
+
+.we-session-item:hover {
+  background: var(--surface0);
+  color: var(--text);
+}
+
+.we-session-item.active {
+  background: var(--surface0);
+  color: var(--mauve);
+}
+
+.we-session-item-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--overlay0);
+  flex-shrink: 0;
+}
+
+.we-session-item.active .we-session-item-dot {
+  background: var(--mauve);
+}
+
+.we-session-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.we-session-item-dir {
+  font-size: 10px;
+  color: var(--overlay0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.we-tree-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface1) transparent;
+}
+
+.we-tree-body::-webkit-scrollbar { width: 4px; }
+.we-tree-body::-webkit-scrollbar-track { background: transparent; }
+.we-tree-body::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 2px; }
+
+.we-tree-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: var(--overlay0);
+  text-align: center;
+}
+
+/* Tree node rows */
+.we-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--subtext1);
+  user-select: none;
+  white-space: nowrap;
+  border-radius: 4px;
+  margin: 0 4px;
+  min-height: 22px;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.we-tree-node:hover {
+  background: var(--surface0);
+  color: var(--text);
+}
+
+.we-tree-node.active {
+  background: rgba(203, 166, 247, 0.12);
+  color: var(--mauve);
+}
+
+.we-tree-node-indent {
+  flex-shrink: 0;
+}
+
+.we-tree-node-toggle {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--overlay0);
+  font-size: 9px;
+  transition: transform var(--transition-fast);
+}
+
+.we-tree-node-toggle.expanded {
+  transform: rotate(90deg);
+}
+
+.we-tree-node-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.we-tree-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.we-tree-node-git {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: auto;
+}
+
+.we-tree-node-git.modified { color: var(--yellow); }
+.we-tree-node-git.added    { color: var(--green);  }
+.we-tree-node-git.deleted  { color: var(--red);    }
+.we-tree-node-git.untracked{ color: var(--overlay1);}
+
+/* Children container */
+.we-tree-children {
+  display: none;
+}
+.we-tree-children.expanded {
+  display: block;
+}
+
+/* ── Resize Handle ──────────────────────────────────────── */
+
+.we-resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--transition-fast);
+  position: relative;
+  z-index: 10;
+}
+
+.we-resize-handle:hover,
+.we-resize-handle.dragging {
+  background: var(--mauve);
+}
+
+/* ── Editor Area ────────────────────────────────────────── */
+
+.we-editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Editor toolbar */
+.we-editor-toolbar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  flex-shrink: 0;
+  background: var(--mantle);
+  border-bottom: 1px solid var(--surface0);
+  overflow: hidden;
+}
+
+/* Tab strip */
+.we-tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 100%;
+  scrollbar-width: none;
+}
+
+.we-tabs::-webkit-scrollbar { display: none; }
+
+.we-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  height: 100%;
+  font-size: 12px;
+  color: var(--subtext0);
+  cursor: pointer;
+  white-space: nowrap;
+  border-right: 1px solid var(--surface0);
+  background: transparent;
+  border-top: none;
+  border-left: none;
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  user-select: none;
+  flex-shrink: 0;
+  max-width: 200px;
+  font-family: var(--font-sans);
+  position: relative;
+}
+
+.we-tab:hover {
+  color: var(--text);
+  background: var(--surface0);
+}
+
+.we-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--mauve);
+}
+
+.we-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.we-tab-modified::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: var(--mauve);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.we-tab-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--overlay0);
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  font-family: monospace;
+}
+
+.we-tab-close:hover {
+  background: var(--surface1);
+  color: var(--text);
+}
+
+/* Toolbar action buttons */
+.we-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--surface0);
+}
+
+.we-toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font-size: 11px;
+  color: var(--subtext0);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.we-toolbar-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface0);
+  border-color: var(--surface1);
+}
+
+.we-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.we-toolbar-btn.we-git-toggle-btn {
+  color: var(--blue);
+}
+
+.we-toolbar-btn.we-git-toggle-btn:hover {
+  background: rgba(137, 180, 250, 0.1);
+  border-color: rgba(137, 180, 250, 0.3);
+}
+
+/* CodeMirror container */
+.we-editor-container {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  background: var(--base);
+}
+
+.we-editor-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--overlay0);
+  pointer-events: none;
+}
+
+.we-editor-empty svg {
+  opacity: 0.4;
+}
+
+.we-editor-empty p {
+  font-size: 13px;
+  margin: 0;
+}
+
+/* Hide empty state when editor is mounted */
+.we-editor-container.has-editor .we-editor-empty {
+  display: none;
+}
+
+/* ── Git Panel ──────────────────────────────────────────── */
+
+.we-git-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--mantle);
+  border-top: 1px solid var(--surface0);
+  max-height: 280px;
+  min-height: 38px;
+  transition: max-height var(--transition-normal);
+  overflow: hidden;
+}
+
+.we-git-panel.collapsed {
+  max-height: 38px;
+}
+
+.we-git-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 38px;
+  flex-shrink: 0;
+  cursor: default;
+  border-bottom: 1px solid var(--surface0);
+}
+
+.we-git-panel.collapsed .we-git-header {
+  border-bottom: none;
+}
+
+.we-git-collapse-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--overlay0);
+  border-radius: 4px;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.we-git-collapse-btn:hover {
+  color: var(--text);
+  background: var(--surface0);
+}
+
+.we-git-chevron {
+  transition: transform var(--transition-fast);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.we-git-panel.collapsed .we-git-chevron {
+  transform: rotate(-90deg);
+}
+
+.we-git-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--subtext0);
+  flex-shrink: 0;
+}
+
+.we-git-branch {
+  font-size: 11px;
+  color: var(--blue);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.we-git-ahead-behind {
+  font-size: 10px;
+  color: var(--overlay1);
+  flex-shrink: 0;
+}
+
+.we-git-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.we-git-refresh-btn,
+.we-git-push-btn,
+.we-git-pr-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  background: var(--surface0);
+  color: var(--subtext1);
+  border: 1px solid var(--surface1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.we-git-refresh-btn:hover,
+.we-git-push-btn:hover {
+  color: var(--text);
+  background: var(--surface1);
+}
+
+.we-git-pr-btn {
+  color: var(--mauve);
+  border-color: rgba(203, 166, 247, 0.3);
+}
+
+.we-git-pr-btn:hover {
+  background: rgba(203, 166, 247, 0.1);
+  color: var(--mauve);
+}
+
+/* Git body */
+.we-git-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface1) transparent;
+}
+
+.we-git-body::-webkit-scrollbar { width: 4px; }
+.we-git-body::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 2px; }
+
+.we-git-section {
+  border-bottom: 1px solid var(--surface0);
+}
+
+.we-git-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--overlay1);
+  background: var(--crust);
+}
+
+.we-git-section-action {
+  background: none;
+  border: none;
+  font-size: 10px;
+  color: var(--overlay1);
+  cursor: pointer;
+  padding: 0;
+  font-family: var(--font-sans);
+  transition: color var(--transition-fast);
+}
+
+.we-git-section-action:hover {
+  color: var(--text);
+}
+
+.we-git-staged-files,
+.we-git-unstaged-files {
+  padding: 2px 0;
+}
+
+.we-git-empty-hint {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--overlay0);
+  display: block;
+}
+
+/* Git file row */
+.we-git-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--subtext1);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition-fast);
+}
+
+.we-git-file-row:hover {
+  background: var(--surface0);
+}
+
+.we-git-file-row input[type="checkbox"] {
+  accent-color: var(--mauve);
+  flex-shrink: 0;
+}
+
+.we-git-file-status {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 14px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
+.we-git-file-status.M { color: var(--yellow); }
+.we-git-file-status.A { color: var(--green); }
+.we-git-file-status.D { color: var(--red); }
+.we-git-file-status.U { color: var(--overlay1); }
+.we-git-file-status.R { color: var(--teal); }
+
+.we-git-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.we-git-file-diff-btn {
+  background: none;
+  border: none;
+  font-size: 10px;
+  color: var(--overlay0);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--font-sans);
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+.we-git-file-row:hover .we-git-file-diff-btn {
+  opacity: 1;
+}
+
+.we-git-file-diff-btn:hover {
+  color: var(--text);
+  background: var(--surface1);
+}
+
+/* Commit area */
+.we-git-commit-area {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  align-items: flex-end;
+}
+
+.we-git-commit-msg {
+  flex: 1;
+  background: var(--surface0);
+  color: var(--text);
+  border: 1px solid var(--surface1);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  resize: none;
+  outline: none;
+  line-height: 1.4;
+  transition: border-color var(--transition-fast);
+}
+
+.we-git-commit-msg:focus {
+  border-color: var(--mauve);
+}
+
+.we-git-commit-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* ── Diff View Decorations ──────────────────────────────── */
+
+.cm-diff-added-line {
+  background: rgba(166, 227, 161, 0.08) !important;
+}
+
+.cm-diff-removed-line {
+  background: rgba(243, 139, 168, 0.10) !important;
+}
+
+.cm-diff-hunk-line {
+  background: rgba(137, 180, 250, 0.08) !important;
+  color: var(--blue);
+  font-style: italic;
+}
+
+/* ── CodeMirror theme overrides ─────────────────────────── */
+
+/* Syntax token colors (Catppuccin Mocha) */
+.ͼ1 .tok-keyword    { color: var(--mauve); }
+.ͼ1 .tok-string     { color: var(--green); }
+.ͼ1 .tok-number     { color: var(--peach); }
+.ͼ1 .tok-comment    { color: var(--overlay1); font-style: italic; }
+.ͼ1 .tok-type       { color: var(--yellow); }
+.ͼ1 .tok-function   { color: var(--blue); }
+.ͼ1 .tok-className  { color: var(--yellow); }
+.ͼ1 .tok-variableName { color: var(--text); }
+.ͼ1 .tok-propertyName { color: var(--lavender); }
+.ͼ1 .tok-operator   { color: var(--sky); }
+.ͼ1 .tok-punctuation { color: var(--overlay2, var(--subtext0)); }
+.ͼ1 .tok-angleBracket { color: var(--mauve); }
+.ͼ1 .tok-tagName    { color: var(--red); }
+.ͼ1 .tok-attributeName { color: var(--yellow); }
+.ͼ1 .tok-attributeValue { color: var(--green); }
+.ͼ1 .tok-meta       { color: var(--overlay1); }
+.ͼ1 .tok-bool       { color: var(--peach); }
+.ͼ1 .tok-null       { color: var(--peach); }
+.ͼ1 .tok-regexp     { color: var(--teal); }

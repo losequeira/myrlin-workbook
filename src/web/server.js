@@ -6369,6 +6369,316 @@ app.get('/api/browse', requireAuth, (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────
+//  WORKSPACES EDITOR — File System & Git Routes
+// ──────────────────────────────────────────────────────────
+
+/**
+ * Security helper: resolve and validate a path is under a known session workingDir.
+ * Rejects .git internals, sensitive extensions for writes, and paths outside sessions.
+ * @param {string} inputPath - User-supplied path
+ * @param {object} [opts]
+ * @param {boolean} [opts.write] - If true, also reject sensitive extension patterns
+ * @returns {string} Resolved absolute path
+ * @throws {Error} with .statusCode property if invalid
+ */
+function resolveAllowedPath(inputPath, opts = {}) {
+  if (!inputPath || typeof inputPath !== 'string') {
+    const e = new Error('Path is required'); e.statusCode = 400; throw e;
+  }
+  const resolved = path.resolve(inputPath);
+  // Block .git internal access at component level
+  const parts = resolved.split(path.sep);
+  if (parts.some(p => p === '.git')) {
+    const e = new Error('Access to .git internals is not allowed'); e.statusCode = 403; throw e;
+  }
+  // Must be under a known session workingDir
+  const store = getStore();
+  const sessions = store.getAllSessionsList ? store.getAllSessionsList() : [];
+  const allowed = sessions.some(s => s.workingDir && resolved.startsWith(s.workingDir + path.sep) || resolved === s.workingDir);
+  if (!allowed) {
+    const e = new Error('Path is outside any known session working directory'); e.statusCode = 403; throw e;
+  }
+  // For writes: block sensitive extensions
+  if (opts.write) {
+    const base = path.basename(resolved).toLowerCase();
+    if (base === '.env' || base.endsWith('.pem') || base.endsWith('.key') || base.endsWith('.p12')) {
+      const e = new Error('Writing to sensitive files is not allowed'); e.statusCode = 403; throw e;
+    }
+  }
+  return resolved;
+}
+
+/**
+ * GET /api/fs/tree?path=&depth=
+ * Returns a directory tree (skipping node_modules and .git), with git status badges.
+ */
+app.get('/api/fs/tree', requireAuth, async (req, res) => {
+  const fsSync = require('fs');
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.query.path);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  const maxDepth = Math.min(parseInt(req.query.depth) || 3, 6);
+  // Gather git status badges
+  const statusMap = {};
+  try {
+    const raw = await gitExec(['status', '--porcelain'], dir);
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      const xy = line.substring(0, 2);
+      const file = line.substring(3).trim().replace(/^"(.*)"$/, '$1');
+      statusMap[file] = xy;
+    }
+  } catch (_) { /* not a git repo */ }
+
+  function buildTree(absPath, depth) {
+    const entries = [];
+    let items;
+    try { items = fsSync.readdirSync(absPath, { withFileTypes: true }); } catch { return entries; }
+    for (const item of items) {
+      if (item.name === 'node_modules' || item.name === '.git') continue;
+      const fullPath = path.join(absPath, item.name);
+      const relPath = path.relative(dir, fullPath);
+      const isDir = item.isDirectory();
+      const node = { name: item.name, path: fullPath, type: isDir ? 'directory' : 'file', gitStatus: statusMap[relPath] || null };
+      if (isDir && depth < maxDepth) {
+        node.children = buildTree(fullPath, depth + 1);
+      } else if (isDir) {
+        node.children = null; // collapsed — fetch on expand
+      }
+      entries.push(node);
+    }
+    entries.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+    return entries;
+  }
+
+  res.json({ path: dir, nodes: buildTree(dir, 0) });
+});
+
+/**
+ * GET /api/fs/file?path=
+ * Returns file content. Refuses files >1MB or binary (null-byte detected).
+ */
+app.get('/api/fs/file', requireAuth, (req, res) => {
+  const fsSync = require('fs');
+  let filePath;
+  try {
+    filePath = resolveAllowedPath(req.query.path);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  let stat;
+  try { stat = fsSync.statSync(filePath); } catch { return res.status(404).json({ error: 'File not found' }); }
+  if (stat.size > 1024 * 1024) return res.status(413).json({ error: 'File too large (>1MB)' });
+  const buf = fsSync.readFileSync(filePath);
+  // Binary detection: check for null bytes in first 8KB
+  const sample = buf.slice(0, 8192);
+  if (sample.includes(0)) return res.status(415).json({ error: 'Binary files cannot be displayed' });
+  res.json({ path: filePath, content: buf.toString('utf8'), size: stat.size });
+});
+
+/**
+ * PUT /api/fs/file
+ * Overwrites an existing file. Body: { path, content }
+ * Refuses new files, binary content, and sensitive extensions.
+ */
+app.put('/api/fs/file', requireAuth, (req, res) => {
+  const fsSync = require('fs');
+  const { path: inputPath, content } = req.body || {};
+  if (typeof content !== 'string') return res.status(400).json({ error: 'content must be a string' });
+  let filePath;
+  try {
+    filePath = resolveAllowedPath(inputPath, { write: true });
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  if (!fsSync.existsSync(filePath)) return res.status(403).json({ error: 'Creating new files is not allowed via this endpoint' });
+  try {
+    fsSync.writeFileSync(filePath, content, 'utf8');
+    res.json({ ok: true, path: filePath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/git/status-detailed?dir=
+ * Returns parsed git status: branch, ahead/behind, staged, unstaged, untracked.
+ */
+app.get('/api/git/status-detailed', requireAuth, async (req, res) => {
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.query.dir);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  try {
+    const branch = (await gitExec(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
+    const porcelain = await gitExec(['status', '--porcelain=v1'], dir);
+    const staged = [], unstaged = [], untracked = [];
+    for (const line of porcelain.split('\n')) {
+      if (!line.trim()) continue;
+      const x = line[0], y = line[1], file = line.substring(3).trim().replace(/^"(.*)"$/, '$1');
+      if (x !== ' ' && x !== '?') staged.push({ file, status: x });
+      if (y === 'M' || y === 'D') unstaged.push({ file, status: y });
+      if (x === '?' && y === '?') untracked.push({ file });
+    }
+    let ahead = 0, behind = 0;
+    try {
+      const upstream = (await gitExec(['rev-parse', '--abbrev-ref', '@{upstream}'], dir)).trim();
+      const counts = (await gitExec(['rev-list', '--left-right', '--count', `HEAD...${upstream}`], dir)).trim();
+      const [a, b] = counts.split('\t').map(Number);
+      ahead = a || 0; behind = b || 0;
+    } catch (_) { /* no upstream */ }
+    res.json({ branch, ahead, behind, staged, unstaged, untracked });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/git/diff-file?dir=&file=&staged=
+ * Returns raw unified diff for a specific file.
+ */
+app.get('/api/git/diff-file', requireAuth, async (req, res) => {
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.query.dir);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  const file = req.query.file;
+  if (!file) return res.status(400).json({ error: 'file is required' });
+  const staged = req.query.staged === 'true';
+  try {
+    const args = ['diff', ...(staged ? ['--staged'] : []), '--', file];
+    const diff = await gitExec(args, dir);
+    res.json({ diff });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/git/stage
+ * Body: { dir, files[] }
+ */
+app.post('/api/git/stage', requireAuth, async (req, res) => {
+  const { files } = req.body || {};
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.body.dir);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'files array required' });
+  try {
+    await gitExec(['add', '--', ...files], dir);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/git/unstage
+ * Body: { dir, files[] }
+ */
+app.post('/api/git/unstage', requireAuth, async (req, res) => {
+  const { files } = req.body || {};
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.body.dir);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'files array required' });
+  try {
+    await gitExec(['restore', '--staged', '--', ...files], dir);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/git/commit
+ * Body: { dir, message }
+ */
+app.post('/api/git/commit', requireAuth, async (req, res) => {
+  const { message } = req.body || {};
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.body.dir);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  if (!message || !message.trim()) return res.status(400).json({ error: 'message is required' });
+  try {
+    const out = await gitExec(['commit', '-m', message.trim()], dir);
+    const hashMatch = out.match(/\[[\w/]+\s+([a-f0-9]+)\]/);
+    res.json({ ok: true, hash: hashMatch ? hashMatch[1] : null, output: out.trim() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/git/push
+ * Body: { dir }
+ */
+app.post('/api/git/push', requireAuth, async (req, res) => {
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.body.dir);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  try {
+    const out = await new Promise((resolve, reject) => {
+      const { execFile } = require('child_process');
+      execFile('git', ['push'], { cwd: dir, timeout: 30000, maxBuffer: 1024 * 512 }, (err, stdout, stderr) => {
+        if (err) return reject(new Error((stderr || err.message || '').trim()));
+        resolve((stdout + stderr).trim());
+      });
+    });
+    res.json({ ok: true, output: out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/git/pr-create
+ * Body: { dir, title, body, base }
+ */
+app.post('/api/git/pr-create', requireAuth, async (req, res) => {
+  const { title, body: prBody, base } = req.body || {};
+  let dir;
+  try {
+    dir = resolveAllowedPath(req.body.dir);
+  } catch (e) {
+    return res.status(e.statusCode || 400).json({ error: e.message });
+  }
+  if (!title || !title.trim()) return res.status(400).json({ error: 'title is required' });
+  const ghArgs = ['pr', 'create', '--title', title.trim()];
+  if (prBody) ghArgs.push('--body', prBody);
+  if (base) ghArgs.push('--base', base);
+  try {
+    const out = await ghExec(ghArgs, dir);
+    const urlMatch = out.match(/https:\/\/github\.com\/[^\s]+/);
+    res.json({ ok: true, url: urlMatch ? urlMatch[0] : null, output: out.trim() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────
 //  SERVER START
 // ──────────────────────────────────────────────────────────
 
