@@ -4598,6 +4598,39 @@ setInterval(() => {
   }
 }, 60000).unref();
 
+const PR_STATUS_CACHE_TTL = 30000; // 30 seconds
+const prStatusCache = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of prStatusCache) {
+    if (now - entry.ts > PR_STATUS_CACHE_TTL * 2) prStatusCache.delete(key);
+  }
+}, 60000).unref();
+
+app.get('/api/git/pr-status', requireAuth, async (req, res) => {
+  const dir = req.query.dir;
+  if (!dir) return res.status(400).json({ error: 'dir query parameter required' });
+
+  const cached = prStatusCache.get(dir);
+  if (cached && Date.now() - cached.ts < PR_STATUS_CACHE_TTL) {
+    return res.json(cached.data);
+  }
+
+  try {
+    const out = await ghExec(['pr', 'view', '--json', 'number,url,state,title'], dir);
+    const pr = JSON.parse(out);
+    const result = { pr: { number: pr.number, url: pr.url, state: pr.state, title: pr.title } };
+    prStatusCache.set(dir, { data: result, ts: Date.now() });
+    return res.json(result);
+  } catch {
+    // No PR, gh not installed, or not a GitHub repo — all non-fatal
+    const result = { pr: null };
+    prStatusCache.set(dir, { data: result, ts: Date.now() });
+    return res.json(result);
+  }
+});
+
 async function gitRepoRoot(dir) {
   try {
     const root = await gitExec(['rev-parse', '--show-toplevel'], dir);
@@ -6726,7 +6759,7 @@ function startServer(port = 3456, host = '127.0.0.1') {
   attachStoreEvents();
 
   // Backfill missing resumeSessionIds so cost tracking works for all sessions
-  setImmediate(() => backfillResumeSessionIds());
+  // setImmediate(() => backfillResumeSessionIds());
   // Start JSONL watchers for any sessions that were already running before this boot
   {
     const store = getStore();
