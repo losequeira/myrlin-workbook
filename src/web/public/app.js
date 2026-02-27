@@ -119,6 +119,7 @@ class CWMApp {
       showHidden: false,
       resourceData: null,
       gitStatusCache: {},
+      prStatusCache: {},
       settings: Object.assign({
         paneColorHighlights: true,
         activityIndicators: true,
@@ -2144,6 +2145,10 @@ class CWMApp {
     const ws = this.state.workspaces.find(w => w.id === id) || null;
     this.state.activeWorkspace = ws;
 
+    // Reset session selection when switching workspaces
+    this.state.selectedSession = null;
+    this.renderSessionDetail();
+
     // Persist to localStorage
     if (ws) {
       localStorage.setItem('cwm_activeWorkspace', ws.id);
@@ -2164,6 +2169,11 @@ class CWMApp {
 
     if (this.state.viewMode === 'workspace') {
       await this.loadSessions();
+
+      // Auto-select if the workspace has exactly one session
+      if (this.state.sessions.length === 1) {
+        await this.selectSession(this.state.sessions[0].id);
+      }
     }
 
     // Close mobile sidebar
@@ -12735,6 +12745,19 @@ class CWMApp {
       const data = await this.api('GET', '/api/git/status?dir=' + encodeURIComponent(dir));
       this.state.gitStatusCache[dir] = { data, timestamp: Date.now() };
       console.log('git status', data);
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async fetchPRStatus(dir) {
+    if (!dir) return null;
+    const cached = this.state.prStatusCache[dir];
+    if (cached && Date.now() - cached.timestamp < 30000) return cached.data;
+    try {
+      const data = await this.api('GET', '/api/git/pr-status?dir=' + encodeURIComponent(dir));
+      this.state.prStatusCache[dir] = { data, timestamp: Date.now() };
       return data;
     } catch {
       return null;
