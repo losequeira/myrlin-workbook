@@ -1231,7 +1231,9 @@ textarea.input {
 }
 
 .workspace-info {
-  flex: 1;
+  display: flex;
+  flex-direction: row;
+  gap: 1rem;
   min-width: 0;
 }
 
@@ -9941,9 +9943,16 @@ html {
   scrollbar-color: var(--surface1) transparent;
 }
 
-.we-tree-body::-webkit-scrollbar { width: 4px; }
-.we-tree-body::-webkit-scrollbar-track { background: transparent; }
-.we-tree-body::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 2px; }
+.we-tree-body::-webkit-scrollbar {
+  width: 4px;
+}
+.we-tree-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.we-tree-body::-webkit-scrollbar-thumb {
+  background: var(--surface1);
+  border-radius: 2px;
+}
 
 .we-tree-empty {
   padding: 16px 12px;
@@ -9966,7 +9975,9 @@ html {
   border-radius: 4px;
   margin: 0 4px;
   min-height: 22px;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .we-tree-node:hover {
@@ -10019,10 +10030,18 @@ html {
   margin-left: auto;
 }
 
-.we-tree-node-git.modified { color: var(--yellow); }
-.we-tree-node-git.added    { color: var(--green);  }
-.we-tree-node-git.deleted  { color: var(--red);    }
-.we-tree-node-git.untracked{ color: var(--overlay1);}
+.we-tree-node-git.modified {
+  color: var(--yellow);
+}
+.we-tree-node-git.added {
+  color: var(--green);
+}
+.we-tree-node-git.deleted {
+  color: var(--red);
+}
+.we-tree-node-git.untracked {
+  color: var(--overlay1);
+}
 
 /* Children container */
 .we-tree-children {
@@ -10081,7 +10100,9 @@ html {
   scrollbar-width: none;
 }
 
-.we-tabs::-webkit-scrollbar { display: none; }
+.we-tabs::-webkit-scrollbar {
+  display: none;
+}
 
 .we-tab {
   display: flex;
@@ -10098,7 +10119,9 @@ html {
   border-top: none;
   border-left: none;
   border-bottom: 2px solid transparent;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
   user-select: none;
   flex-shrink: 0;
   max-width: 200px;
@@ -10122,7 +10145,7 @@ html {
 }
 
 .we-tab-modified::after {
-  content: '';
+  content: "";
   width: 6px;
   height: 6px;
   background: var(--mauve);
@@ -10175,7 +10198,10 @@ html {
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: var(--font-sans);
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast);
   white-space: nowrap;
 }
 
@@ -10279,7 +10305,9 @@ html {
   border-radius: 4px;
   padding: 0;
   flex-shrink: 0;
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .we-git-collapse-btn:hover {
@@ -10341,7 +10369,9 @@ html {
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: var(--font-sans);
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .we-git-refresh-btn:hover,
@@ -10371,8 +10401,13 @@ html {
   scrollbar-color: var(--surface1) transparent;
 }
 
-.we-git-body::-webkit-scrollbar { width: 4px; }
-.we-git-body::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 2px; }
+.we-git-body::-webkit-scrollbar {
+  width: 4px;
+}
+.we-git-body::-webkit-scrollbar-thumb {
+  background: var(--surface1);
+  border-radius: 2px;
+}
 
 .we-git-section {
   border-bottom: 1px solid var(--surface0);
@@ -10452,11 +10487,21 @@ html {
   font-family: var(--font-mono);
 }
 
-.we-git-file-status.M { color: var(--yellow); }
-.we-git-file-status.A { color: var(--green); }
-.we-git-file-status.D { color: var(--red); }
-.we-git-file-status.U { color: var(--overlay1); }
-.we-git-file-status.R { color: var(--teal); }
+.we-git-file-status.M {
+  color: var(--yellow);
+}
+.we-git-file-status.A {
+  color: var(--green);
+}
+.we-git-file-status.D {
+  color: var(--red);
+}
+.we-git-file-status.U {
+  color: var(--overlay1);
+}
+.we-git-file-status.R {
+  color: var(--teal);
+}
 
 .we-git-file-name {
   flex: 1;
@@ -10477,7 +10522,9 @@ html {
   border-radius: 3px;
   font-family: var(--font-sans);
   opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .we-git-file-row:hover .we-git-file-diff-btn {
@@ -10529,7 +10576,7 @@ html {
 }
 
 .cm-diff-removed-line {
-  background: rgba(243, 139, 168, 0.10) !important;
+  background: rgba(243, 139, 168, 0.1) !important;
 }
 
 .cm-diff-hunk-line {
@@ -10541,22 +10588,61 @@ html {
 /* ── CodeMirror theme overrides ─────────────────────────── */
 
 /* Syntax token colors (Catppuccin Mocha) */
-.ͼ1 .tok-keyword    { color: var(--mauve); }
-.ͼ1 .tok-string     { color: var(--green); }
-.ͼ1 .tok-number     { color: var(--peach); }
-.ͼ1 .tok-comment    { color: var(--overlay1); font-style: italic; }
-.ͼ1 .tok-type       { color: var(--yellow); }
-.ͼ1 .tok-function   { color: var(--blue); }
-.ͼ1 .tok-className  { color: var(--yellow); }
-.ͼ1 .tok-variableName { color: var(--text); }
-.ͼ1 .tok-propertyName { color: var(--lavender); }
-.ͼ1 .tok-operator   { color: var(--sky); }
-.ͼ1 .tok-punctuation { color: var(--overlay2, var(--subtext0)); }
-.ͼ1 .tok-angleBracket { color: var(--mauve); }
-.ͼ1 .tok-tagName    { color: var(--red); }
-.ͼ1 .tok-attributeName { color: var(--yellow); }
-.ͼ1 .tok-attributeValue { color: var(--green); }
-.ͼ1 .tok-meta       { color: var(--overlay1); }
-.ͼ1 .tok-bool       { color: var(--peach); }
-.ͼ1 .tok-null       { color: var(--peach); }
-.ͼ1 .tok-regexp     { color: var(--teal); }
+.ͼ1 .tok-keyword {
+  color: var(--mauve);
+}
+.ͼ1 .tok-string {
+  color: var(--green);
+}
+.ͼ1 .tok-number {
+  color: var(--peach);
+}
+.ͼ1 .tok-comment {
+  color: var(--overlay1);
+  font-style: italic;
+}
+.ͼ1 .tok-type {
+  color: var(--yellow);
+}
+.ͼ1 .tok-function {
+  color: var(--blue);
+}
+.ͼ1 .tok-className {
+  color: var(--yellow);
+}
+.ͼ1 .tok-variableName {
+  color: var(--text);
+}
+.ͼ1 .tok-propertyName {
+  color: var(--lavender);
+}
+.ͼ1 .tok-operator {
+  color: var(--sky);
+}
+.ͼ1 .tok-punctuation {
+  color: var(--overlay2, var(--subtext0));
+}
+.ͼ1 .tok-angleBracket {
+  color: var(--mauve);
+}
+.ͼ1 .tok-tagName {
+  color: var(--red);
+}
+.ͼ1 .tok-attributeName {
+  color: var(--yellow);
+}
+.ͼ1 .tok-attributeValue {
+  color: var(--green);
+}
+.ͼ1 .tok-meta {
+  color: var(--overlay1);
+}
+.ͼ1 .tok-bool {
+  color: var(--peach);
+}
+.ͼ1 .tok-null {
+  color: var(--peach);
+}
+.ͼ1 .tok-regexp {
+  color: var(--teal);
+}
