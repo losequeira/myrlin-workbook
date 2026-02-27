@@ -92,6 +92,9 @@ const port = parseInt(process.env.PORT, 10) || 3456;
 const host = process.env.CWM_HOST || '127.0.0.1';
 const server = startServer(port, host);
 
+const { initMacNotifications } = require('./core/mac-notifications');
+initMacNotifications();
+
 console.log(`CWM GUI running at http://${host}:${port}`);
 console.log('Press Ctrl+C to stop.');
 

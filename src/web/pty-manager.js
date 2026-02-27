@@ -16,6 +16,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { getStore } = require('../state/store');
+const { getNotificationManager } = require('../core/notifications');
 
 /**
  * Resolve the real working directory for a Claude session.
@@ -78,7 +79,7 @@ const MAX_SCROLLBACK_CHARS = 100 * 1024; // 100KB
  * Represents a single PTY session with its process, clients, and scrollback.
  */
 class PtySession {
-  constructor(sessionId, ptyProcess) {
+  constructor(sessionId, ptyProcess, { shellBin, cwd, cols, rows, env } = {}) {
     this.sessionId = sessionId;
     this.pty = ptyProcess;
     this.clients = new Set();      // Set of WebSocket connections
@@ -90,6 +91,13 @@ class PtySession {
     this.pingInterval = null;    // Keepalive ping interval ID
     this._lastActiveTimer = null; // Debounce timer for lastActive updates
     this.createdAt = Date.now();  // Track when session was spawned
+    // Stored for force-exit restart (drop to shell)
+    this._shellBin = shellBin || '/bin/bash';
+    this._cwd = cwd || process.cwd();
+    this._cols = cols || 120;
+    this._rows = rows || 30;
+    this._env = env || process.env;
+    this._restarting = false;    // True while _restartAsShell is in progress
   }
 
   /**
@@ -125,7 +133,7 @@ class PtySessionManager {
    * @param {boolean} [options.bypassPermissions=false] - If true, adds --dangerously-skip-permissions
    * @returns {PtySession} The PTY session object
    */
-  spawnSession(sessionId, { command = 'claude', cwd, cols = 120, rows = 30, bypassPermissions = false, resumeSessionId = null, verbose = false, model = null, agentTeams = false, shell: requestedShell = null } = {}) {
+  spawnSession(sessionId, { command = 'claude', cwd, cols = 120, rows = 30, bypassPermissions = false, resumeSessionId = null, verbose = false, model = null, agentTeams = false, shell: requestedShell = null, newSession = false } = {}) {
     // Return existing session if already alive
     const existing = this.sessions.get(sessionId);
     if (existing && existing.alive) {
@@ -153,10 +161,11 @@ class PtySessionManager {
     let fullCommand = command;
     if (resumeSessionId) {
       fullCommand += ' --resume ' + resumeSessionId;
-    } else if (cwd) {
+    } else if (cwd && !newSession) {
       // No explicit session to resume - use --continue to pick up most recent
       // conversation in this working directory. On a fresh dir with no history,
       // Claude will start a new conversation (same as bare `claude`).
+      // Skipped when newSession=true so the user gets a completely fresh session.
       fullCommand += ' --continue';
     }
     if (bypassPermissions) {
@@ -272,14 +281,19 @@ class PtySessionManager {
       sessionEnv.SHELL = shell;
     }
 
-    // Build shell arguments based on the resolved shell binary
+    // Build shell arguments based on the resolved shell binary.
+    // Unix: append `; exec $shell -l` so that when Claude exits (Ctrl+C or natural exit),
+    // the terminal drops to an interactive login shell instead of closing.
     if (shell === 'cmd.exe') {
-      shellArgs = ['/c', fullCommand];
+      shellArgs = ['/k', fullCommand];
     } else if (shell === 'powershell.exe' || shell === 'pwsh.exe') {
       shellArgs = ['-NoProfile', '-Command', fullCommand];
     } else {
-      // Unix shells and Git Bash all use -l -c
-      shellArgs = ['-l', '-c', fullCommand];
+      // Unix shells and Git Bash: -l -c runs the command as a login shell.
+      // `trap '' INT` prevents the wrapper shell from being killed by SIGINT so that
+      // `exec $shell -l` always runs after Claude exits (even if killed via Ctrl+C).
+      // Once exec replaces this process with an interactive shell, the trap is gone.
+      shellArgs = ['-l', '-c', `trap '' INT; ${fullCommand}; exec ${shell} -l`];
     }
 
     console.log(`[PTY] Spawning: ${shell} ${shellArgs.join(' ')} (cwd: ${resolvedCwd})`);
@@ -305,7 +319,13 @@ class PtySessionManager {
       return null; // caller should check for null
     }
 
-    const session = new PtySession(sessionId, ptyProcess);
+    const session = new PtySession(sessionId, ptyProcess, {
+      shellBin: shell,
+      cwd: resolvedCwd,
+      cols,
+      rows,
+      env: sessionEnv,
+    });
     this.sessions.set(sessionId, session);
 
     // Handle asynchronous PTY process errors (e.g. process crashes after spawn).
@@ -317,67 +337,7 @@ class PtySessionManager {
       });
     }
 
-    // PTY output handler: immediate broadcast with backpressure safety valve.
-    // Data is sent instantly to preserve the native terminal streaming feel.
-    // Only skips a client if its WebSocket buffer exceeds 64KB (overwhelmed tab).
-    ptyProcess.onData((data) => {
-      session.appendScrollback(data);
-
-      // Broadcast immediately to all connected WebSocket clients
-      for (const ws of session.clients) {
-        try {
-          if (ws.readyState === 1) { // WebSocket.OPEN
-            // Backpressure check: if this client's send buffer exceeds 64KB,
-            // it can't keep up — skip it so other terminals stay responsive.
-            // Data is preserved in scrollback for reconnection.
-            if (ws.bufferedAmount < 65536) {
-              ws.send(data);
-            }
-          }
-        } catch (_) {
-          session.clients.delete(ws);
-        }
-      }
-
-      // Throttled lastActive update - fires immediately then at most once per 30s
-      if (!session._lastActiveTimer) {
-        try {
-          const store = getStore();
-          if (store.getSession(sessionId)) {
-            store.updateSession(sessionId, {});
-          }
-        } catch (_) {}
-        session._lastActiveTimer = setTimeout(() => {
-          session._lastActiveTimer = null;
-        }, 30000);
-      }
-    });
-
-    // PTY exit handler
-    ptyProcess.onExit(({ exitCode }) => {
-      session.alive = false;
-      session.exitCode = exitCode;
-
-      // Send structured exit message to all clients (this one IS JSON)
-      const exitMsg = JSON.stringify({ type: 'exit', exitCode });
-      for (const ws of session.clients) {
-        try {
-          if (ws.readyState === 1) {
-            ws.send(exitMsg);
-          }
-        } catch (_) {
-          // ignore
-        }
-      }
-
-      // Update store status
-      try {
-        const store = getStore();
-        store.updateSessionStatus(sessionId, 'stopped', null);
-      } catch (_) {
-        // Store may not have this session
-      }
-    });
+    this._wireHandlers(session, sessionId);
 
     // Update store with running status and PID
     try {
@@ -450,6 +410,147 @@ class PtySessionManager {
     }
 
     return session;
+  }
+
+  /**
+   * Wire onData and onExit handlers onto session.pty.
+   * Called after initial spawn and after _restartAsShell.
+   *
+   * @param {PtySession} session
+   * @param {string} sessionId
+   */
+  _wireHandlers(session, sessionId) {
+    const ptyProcess = session.pty;
+
+    // PTY output handler: immediate broadcast with backpressure safety valve.
+    // Data is sent instantly to preserve the native terminal streaming feel.
+    // Only skips a client if its WebSocket buffer exceeds 64KB (overwhelmed tab).
+    // Pattern matching for Claude permission approval prompts
+    const APPROVAL_PATTERN = /(?:Do you want to|Would you like to)\b.*\?|Allow\b.*\?|\[Y\/n\]|\(y\/n\)|\(Y\)es.*\(N\)o/i;
+    const APPROVAL_DEBOUNCE_MS = 30000;
+
+    ptyProcess.onData((data) => {
+      session.appendScrollback(data);
+
+      // Detect Claude permission prompts and fire a native notification
+      const plain = data.replace(/\x1b\[[0-9;]*[mGKHF]/g, '');
+      if (APPROVAL_PATTERN.test(plain)) {
+        const now = Date.now();
+        if (!session._lastApprovalNotified || now - session._lastApprovalNotified > APPROVAL_DEBOUNCE_MS) {
+          session._lastApprovalNotified = now;
+          try {
+            const store = getStore();
+            const s = store.getSession(sessionId);
+            const name = s ? s.name : sessionId.slice(0, 8);
+            getNotificationManager().notify('warning', 'Approval Required', `"${name}" needs your input`);
+          } catch (_) {}
+        }
+      }
+
+      // Broadcast immediately to all connected WebSocket clients
+      for (const ws of session.clients) {
+        try {
+          if (ws.readyState === 1) { // WebSocket.OPEN
+            // Backpressure check: if this client's send buffer exceeds 64KB,
+            // it can't keep up — skip it so other terminals stay responsive.
+            // Data is preserved in scrollback for reconnection.
+            if (ws.bufferedAmount < 65536) {
+              ws.send(data);
+            }
+          }
+        } catch (_) {
+          session.clients.delete(ws);
+        }
+      }
+
+      // Throttled lastActive update - fires immediately then at most once per 30s
+      if (!session._lastActiveTimer) {
+        try {
+          const store = getStore();
+          if (store.getSession(sessionId)) {
+            store.updateSession(sessionId, {});
+          }
+        } catch (_) {}
+        session._lastActiveTimer = setTimeout(() => {
+          session._lastActiveTimer = null;
+        }, 30000);
+      }
+    });
+
+    // PTY exit handler
+    ptyProcess.onExit(({ exitCode }) => {
+      // If _restartAsShell triggered this exit, skip client notifications —
+      // the new shell PTY will take over immediately.
+      if (session._restarting) {
+        session._restarting = false;
+        return;
+      }
+
+      session.alive = false;
+      session.exitCode = exitCode;
+
+      // Send structured exit message to all clients (this one IS JSON)
+      const exitMsg = JSON.stringify({ type: 'exit', exitCode });
+      for (const ws of session.clients) {
+        try {
+          if (ws.readyState === 1) {
+            ws.send(exitMsg);
+          }
+        } catch (_) {
+          // ignore
+        }
+      }
+
+      // Update store status
+      try {
+        const store = getStore();
+        store.updateSessionStatus(sessionId, 'stopped', null);
+      } catch (_) {
+        // Store may not have this session
+      }
+    });
+  }
+
+  /**
+   * Kill the current PTY and restart it as a plain interactive login shell.
+   * Used by double Ctrl+C (force-exit) to drop Claude and show a regular terminal.
+   *
+   * @param {PtySession} session
+   * @param {string} sessionId
+   */
+  _restartAsShell(session, sessionId) {
+    if (!session.alive) return;
+
+    console.log(`[PTY] Force-exit: restarting session ${sessionId} as interactive shell`);
+    session._restarting = true;
+
+    try {
+      session.pty.kill();
+    } catch (_) {}
+
+    let newPty;
+    try {
+      newPty = pty.spawn(session._shellBin, ['-l'], {
+        name: 'xterm-256color',
+        cols: session._cols,
+        rows: session._rows,
+        cwd: session._cwd,
+        env: session._env,
+      });
+    } catch (err) {
+      console.error(`[PTY] _restartAsShell: failed to spawn shell for ${sessionId}:`, err.message);
+      session._restarting = false;
+      session.alive = false;
+      return;
+    }
+
+    session.pty = newPty;
+    session.alive = true;
+    session.exitCode = null;
+    session.pid = newPty.pid;
+
+    this._wireHandlers(session, sessionId);
+    console.log(`[PTY] Force-exit: shell restarted for session ${sessionId} (PID: ${newPty.pid})`);
   }
 
   /**
@@ -549,10 +650,12 @@ class PtySessionManager {
           // Write user input directly to PTY - NO BUFFERING
           session.pty.write(msg.data);
         } else if (msg.type === 'resize' && msg.cols && msg.rows) {
-          session.pty.resize(
-            Math.max(1, Math.min(500, msg.cols)),
-            Math.max(1, Math.min(200, msg.rows))
-          );
+          session._cols = Math.max(1, Math.min(500, msg.cols));
+          session._rows = Math.max(1, Math.min(200, msg.rows));
+          session.pty.resize(session._cols, session._rows);
+        } else if (msg.type === 'force-exit') {
+          // Double Ctrl+C: kill Claude and drop to a plain interactive shell
+          this._restartAsShell(session, sessionId);
         }
       } catch (_) {
         // Not valid JSON - treat as raw input
