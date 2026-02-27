@@ -7445,6 +7445,29 @@ class CWMApp {
       });
     });
 
+    // Async patch: fetch PR status and append badge to branch rows
+    gitDirs.forEach(dir => {
+      this.fetchPRStatus(dir).then(prInfo => {
+        if (!prInfo || !prInfo.pr) return;
+        const pr = prInfo.pr;
+        list.querySelectorAll(`.ws-session-git-row[data-git-dir="${CSS.escape(dir)}"]`).forEach(el => {
+          // Don't add duplicate badge
+          if (el.querySelector('.ws-pr-badge')) return;
+          // Only add badge if branch span is present (git status already resolved)
+          if (!el.querySelector('.ws-session-git-branch')) return;
+          const a = document.createElement('a');
+          a.className = 'ws-pr-badge session-badge session-badge-pr';
+          a.href = pr.url;
+          a.target = '_blank';
+          a.title = `PR #${pr.number}: ${pr.title} (${pr.state})`;
+          a.textContent = `#${pr.number}`;
+          a.style.cssText = 'background:color-mix(in srgb, var(--green) 15%, transparent);color:var(--green);text-decoration:none;cursor:pointer;margin-left:6px;';
+          a.addEventListener('click', e => e.stopPropagation());
+          el.appendChild(a);
+        });
+      });
+    });
+
     // Fire off async cost fetches for visible sessions (best-effort, non-blocking)
     const visibleSessionIds = (this.state.allSessions || this.state.sessions)
       .filter(s => s.status === 'running' || s.status === 'idle')
